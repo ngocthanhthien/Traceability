@@ -1,0 +1,1828 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iLD Coffee — Hệ thống Truy xuất Nguồn gốc (Traceability)</title>
+<!--
+  ============================================================================
+  iLD COFFEE VIETNAM — TRACEABILITY SYSTEM (single-file, offline, LocalStorage)
+  Chuẩn tham chiếu: FSSC 22000 v5.1 / BRC issue 9 / IFS Food v7
+  Tác giả seed: QA Hygiene & FS. Chạy tốt trên Chrome/Windows.
+  Kiến trúc theo module (comment vùng mã):
+    [CONFIG]   Hằng số, ngưỡng
+    [SEED]     Dữ liệu Annex 1 (Backward/Forward) + danh bạ PIC
+    [STORE]    LocalStorage: load/save/backup/restore
+    [STATE]    Trạng thái ứng dụng
+    [UI]       Render từng tab
+    [LOGIC]    Đợt truy xuất, email, checklist, mass balance, báo cáo
+    [UTILS]    Tiện ích chung
+  ============================================================================
+-->
+<style>
+/* ===================== [THEME] Industrial Dashboard - Light ================ */
+:root{
+  --bg:#eef1f5; --panel:#ffffff; --panel-2:#f7f9fc; --ink:#1a2230; --ink-soft:#5b6676;
+  --line:#d9dfe8; --brand:#0b5cab; --brand-2:#0a4a8a; --brand-soft:#e5f0fb;
+  --ok:#1a8a4a; --ok-soft:#e2f5ea; --warn:#c67a00; --warn-soft:#fdf2dd;
+  --bad:#c0392b; --bad-soft:#fbe6e3; --na:#7a869a; --na-soft:#eef1f5;
+  --shadow:0 1px 3px rgba(16,32,64,.08),0 4px 14px rgba(16,32,64,.06);
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 "Segoe UI",Roboto,Arial,sans-serif}
+button{font-family:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:14px}
+h1,h2,h3,h4{margin:0}
+.hidden{display:none!important}
+
+/* ---- Layout ---- */
+#app{display:grid;grid-template-columns:230px 1fr;grid-template-rows:auto 1fr;height:100vh}
+header#topbar{grid-column:1/3;background:linear-gradient(90deg,var(--brand-2),var(--brand));
+  color:#fff;display:flex;align-items:center;gap:14px;padding:10px 18px;box-shadow:var(--shadow);z-index:5}
+#topbar .logo{width:34px;height:34px;border-radius:8px;background:#fff;color:var(--brand);
+  display:grid;place-items:center;font-weight:800;font-size:16px}
+#topbar h1{font-size:16px;font-weight:700;letter-spacing:.2px}
+#topbar .sub{font-size:11px;opacity:.85;font-weight:400}
+#topbar .spacer{flex:1}
+#topbar .pill{background:rgba(255,255,255,.15);padding:5px 10px;border-radius:20px;font-size:12px}
+#topbar button.mini{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);
+  color:#fff;padding:6px 12px;border-radius:7px;font-size:12px}
+#topbar button.mini:hover{background:rgba(255,255,255,.28)}
+
+nav#side{background:var(--panel);border-right:1px solid var(--line);padding:12px 8px;overflow:auto}
+nav#side .navbtn{width:100%;text-align:left;background:transparent;border:0;color:var(--ink-soft);
+  padding:11px 12px;border-radius:8px;display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:600;margin-bottom:2px}
+nav#side .navbtn .ico{width:20px;text-align:center}
+nav#side .navbtn:hover{background:var(--panel-2);color:var(--ink)}
+nav#side .navbtn.active{background:var(--brand-soft);color:var(--brand-2)}
+nav#side .navbtn .badge{margin-left:auto;background:var(--brand);color:#fff;border-radius:12px;
+  font-size:11px;padding:1px 7px;font-weight:700}
+nav#side .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--na);
+  padding:12px 12px 4px}
+
+main#view{overflow:auto;padding:18px 22px}
+.page{max-width:1180px;margin:0 auto}
+.page-h{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.page-h h2{font-size:20px}
+.page-h .desc{color:var(--ink-soft);font-size:13px}
+.page-h .spacer{flex:1}
+
+/* ---- Common ---- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.card.pad{padding:16px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:960px){.g2,.g3,.g4{grid-template-columns:1fr}}
+label.fld{display:block;margin-bottom:10px}
+label.fld .lb{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:4px}
+input.in,select.in,textarea.in{width:100%;padding:9px 10px;border:1px solid var(--line);
+  border-radius:8px;background:#fff;color:var(--ink)}
+textarea.in{resize:vertical;min-height:74px}
+input.in:focus,select.in:focus,textarea.in:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.btn{border:1px solid var(--line);background:#fff;color:var(--ink);padding:9px 14px;border-radius:8px;font-weight:600;font-size:13px}
+.btn:hover{background:var(--panel-2)}
+.btn.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.pri:hover{background:var(--brand-2)}
+.btn.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+.btn.danger{background:#fff;border-color:var(--bad);color:var(--bad)}
+.btn.danger:hover{background:var(--bad-soft)}
+.btn.sm{padding:6px 10px;font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
+.tag.b{background:var(--brand-soft);color:var(--brand-2)}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.bad{background:var(--bad-soft);color:var(--bad)}
+.tag.na{background:var(--na-soft);color:var(--na)}
+.muted{color:var(--ink-soft)}
+.hr{height:1px;background:var(--line);margin:14px 0;border:0}
+
+/* ---- KPI ---- */
+.kpi{padding:16px;position:relative;overflow:hidden}
+.kpi .n{font-size:30px;font-weight:800;line-height:1}
+.kpi .l{color:var(--ink-soft);font-size:12.5px;margin-top:6px;font-weight:600}
+.kpi .ic{position:absolute;right:12px;top:12px;font-size:26px;opacity:.18}
+
+/* ---- Table ---- */
+table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.tbl th,table.tbl td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+table.tbl th{background:var(--panel-2);font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);position:sticky;top:0}
+table.tbl tr:hover td{background:#fafbfe}
+.stage-row td{background:var(--brand-soft)!important;font-weight:700;color:var(--brand-2)}
+
+/* ---- Progress ---- */
+.bar{height:8px;background:var(--na-soft);border-radius:6px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--brand);border-radius:6px;transition:width .3s}
+.bar.ok>i{background:var(--ok)}
+.bar.warn>i{background:var(--warn)}
+
+/* ---- Countdown ---- */
+.count{font-variant-numeric:tabular-nums;font-weight:800;font-size:26px;letter-spacing:1px}
+.count.ok{color:var(--ok)} .count.warn{color:var(--warn)} .count.bad{color:var(--bad)}
+
+/* ---- Segmented ---- */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:#fff;border:0;padding:8px 16px;font-weight:600;color:var(--ink-soft)}
+.seg button.on{background:var(--brand);color:#fff}
+
+/* ---- Toast ---- */
+#toast{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:99}
+#toast .t{background:var(--ink);color:#fff;padding:11px 15px;border-radius:9px;box-shadow:var(--shadow);
+  font-size:13px;opacity:0;transform:translateY(8px);animation:tin .25s forwards}
+#toast .t.ok{background:var(--ok)} #toast .t.bad{background:var(--bad)} #toast .t.warn{background:var(--warn)}
+@keyframes tin{to{opacity:1;transform:none}}
+
+/* ---- Modal ---- */
+#modal{position:fixed;inset:0;background:rgba(16,24,40,.45);display:grid;place-items:center;z-index:80}
+#modal .box{background:#fff;border-radius:12px;max-width:520px;width:92%;padding:20px;box-shadow:var(--shadow)}
+#modal h3{font-size:17px;margin-bottom:8px}
+#modal .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+
+/* ---- Empty ---- */
+.empty{text-align:center;padding:40px 20px;color:var(--ink-soft)}
+.empty .big{font-size:40px;opacity:.4;margin-bottom:8px}
+
+/* ---- Print ---- */
+@media print{
+  #topbar,nav#side,#tab-dashboard,.noprint{display:none!important}
+  #app{display:block}
+  main#view{overflow:visible;padding:0}
+  .card{box-shadow:none;border:1px solid #bbb}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- ===================== TOP BAR ===================== -->
+  <header id="topbar">
+    <div class="logo">iLD</div>
+    <div>
+      <h1>Hệ thống Truy xuất Nguồn gốc</h1>
+      <div class="sub">iLD Coffee Vietnam · FSSC 22000 v5.1 · BRC 9 · IFS Food 7</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" id="savePill">Đã lưu</span>
+    <button class="mini" onclick="Store.exportJSON()">⬇ Backup</button>
+    <button class="mini" onclick="document.getElementById('importFile').click()">⬆ Restore</button>
+    <input type="file" id="importFile" accept="application/json" class="hidden" onchange="Store.importJSON(this)">
+  </header>
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <nav id="side">
+    <div class="grp">Tổng quan</div>
+    <button class="navbtn" data-tab="dashboard"><span class="ico">▦</span>Dashboard</button>
+    <div class="grp">Thực hiện truy xuất</div>
+    <button class="navbtn" data-tab="exercise"><span class="ico">▶</span>Đợt truy xuất<span class="badge" id="bg-ex">0</span></button>
+    <button class="navbtn" data-tab="email"><span class="ico">✉</span>Soạn email</button>
+    <button class="navbtn" data-tab="checklist"><span class="ico">☑</span>Checklist hồ sơ</button>
+    <button class="navbtn" data-tab="trace"><span class="ico">🔗</span>Chi tiết truy xuất</button>
+    <button class="navbtn" data-tab="mass"><span class="ico">⚖</span>Mass Balance</button>
+    <button class="navbtn" data-tab="report"><span class="ico">▤</span>Báo cáo tổng hợp</button>
+    <div class="grp">Quản trị</div>
+    <button class="navbtn" data-tab="settings"><span class="ico">⚙</span>Cài đặt & Dữ liệu</button>
+  </nav>
+
+  <!-- ===================== MAIN VIEW ===================== -->
+  <main id="view">
+    <section id="tab-dashboard" class="page"></section>
+    <section id="tab-exercise" class="page hidden"></section>
+    <section id="tab-email" class="page hidden"></section>
+    <section id="tab-checklist" class="page hidden"></section>
+    <section id="tab-trace" class="page hidden"></section>
+    <section id="tab-mass" class="page hidden"></section>
+    <section id="tab-report" class="page hidden"></section>
+    <section id="tab-settings" class="page hidden"></section>
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ============================================================================
+   [CONFIG]
+   ==========================================================================*/
+const CFG = {
+  KEY:'ild_trace_v1',
+  MAX_HOURS:4,                 // Thời gian truy xuất tối đa (BRC: 4h)
+  DEV_LIMIT:0.5,               // Ngưỡng deviation mass balance (%)
+  RETAIN_YEARS:5
+};
+
+// Thông tin người gửi email mặc định (có thể sửa trong Cài đặt)
+function defaultSender(){ return {
+  name:'Bình Đặng', short:'Bình', title:'QA Hygiene & FS Supervisor',
+  mobile:'+84 976 667 041', email:'binh.dang@ild-coffee.com',
+  company:'ILD COFFEE VIETNAM CO., LTD',
+  address:'19-4, Road 11, Protrade International IP,\nAn Tay Ward, Ben Cat Town,\nBinh Duong Province, Vietnam.' }; }
+
+/* ============================================================================
+   [SEED] Danh mục biểu mẫu Annex 1 + danh bạ PIC (từ mẫu QA thực tế)
+   Cấu trúc: mảng công đoạn -> {stage, pic, forms:[...]}
+   ==========================================================================*/
+const SEED_CONTACTS = [
+  {name:'iLD Quality Assurance', email:'ild.qa@ild-coffee.com', dept:'QA'},
+  {name:'Truong Tran', email:'truong.tran@ild-coffee.com', dept:'WH/TIP'},
+  {name:'Canh Le', email:'tip.team@ild-coffee.com', dept:'TIP'},
+  {name:'Quang Nguyen', email:'wh.team@ild-coffee.com', dept:'WH'},
+  {name:'Vu Le', email:'vu.le@ild-coffee.com', dept:'PRO'},
+  {name:'Minh Thai', email:'minh.thai@ild-coffee.com', dept:'QA Lab/Line'},
+  {name:'Cam Do', email:'cam.do@ild-coffee.com', dept:'QA Lab/Line'},
+  {name:'Hung Le', email:'hung.le@ild-coffee.com', dept:'UTI'},
+  {name:'Nam Tran', email:'nam.tran@ild-coffee.com', dept:'UTI'},
+  {name:'Thong Nguyen', email:'thong.nguyen@ild-coffee.com', dept:'LOG'},
+  {name:'Khanh Nguyen', email:'khanh.nguyen@ild-coffee.com', dept:'LOG'},
+  {name:'Grasso Team', email:'gra.team@ild-coffee.com', dept:'PRO'},
+  {name:'WTP Team', email:'wtp.team@ild-coffee.com', dept:'UTI'}
+];
+// Danh sách CC mặc định (theo mẫu email QA thực tế)
+const SEED_CC = [
+  {name:'Production Supervisor', email:'ProductionSupervisor@ild-coffee.com', dept:'PRO'},
+  {name:'iLD Shopfloor Warehouse', email:'ild.wh.operator@ild-coffee.com', dept:'WH'}
+];
+
+// ---- Backward (Upstream): từ Thành phẩm về Nguyên liệu ----
+const SEED_BACKWARD = [
+  {stage:'FG Warehouse & Dispatch', pic:'WH', forms:[
+    'OP.WH.F.001 Warehouse Vehicle Checklist',
+    'OP.WH.F.004 Warehouse Materials Transfer Order',
+    'OP.WH.F.005 Warehouse Revert Goods Receipt Record',
+    'OP.WH.F.010 Warehouse Cleaning Implementation Record',
+    'Kiem Soat Luu Kho (Cold Room - Liquid)',
+    'Hóa Đơn / Invoice']},
+  {stage:'Finished Product QA', pic:'QA', forms:[
+    'Báo Cáo Kiểm Tra Chất Lượng Thành Phẩm',
+    'Báo Cáo Kiểm Tra Ngoại Quan Pallet Thành Phẩm',
+    'Chứng Thư Chất Lượng Cho Mỗi Lô Thành Phẩm (COA)',
+    'Biểu Mẫu Kiểm Tra Sự Phù Hợp Của Thành Phẩm Organic']},
+  {stage:'Filling & Packing', pic:'F&P (PRO)', forms:[
+    'Phiếu Tổng Hợp Từ SAP',
+    'OP.PRO.FP.F.001 Start Up Checklist',
+    'OP.PRO.FP.F.002 Changeover Checklist',
+    'OP.PRO.FP.F.003 Manual Cleaning Checklist',
+    'OP.PRO.FP.F.004 Centerline Checklist',
+    'OP.PRO.FP.F.005 Hard Plastic & Sightglass Checklist',
+    'OP.PRO.FP.F.006 Gasket & Sleeve Checklist',
+    'OP.PRO.FP.F.008 Coffee Extract Concentrated Packing Record',
+    'OP.PRO.FP.F.010 Freeze Dried Instant Coffee Packing Record',
+    'OP.PRO.FP.F.008 Material Consumption Record',
+    'Metal Detector Testing Record']},
+  {stage:'Freeze Drying', pic:'FD (PRO)', forms:[
+    'OP.PRO.FD.F.001 Freeze Drying Start Up Checklist',
+    'OP.PRO.FD.F.002 Freeze Drying Shutdown Checklist',
+    'OP.PRO.FD.F.003 Freeze Drying Manual Cleaning Checklist',
+    'OP.PRO.FD.F.004 Freeze Drying Release Line Checklist',
+    'OP.PRO.FD.F.005 Freeze Drying Process Safety Check List',
+    'OP.PRO.FD.F.006 Freeze Drying CL Checklist',
+    'OP.PRO.FD.F.007 Freeze Drying Leaktest Checklist',
+    'OP.PRO.FD.F.008 Freeze Drying Hard Plastic & Sightglass Checklist',
+    'OP.PRO.FD.F.009 Freeze Drying Gasket & Sleeve Checklist',
+    'OP.PRO.FD.F.010 Freeze Drying Record']},
+  {stage:'Evaporation', pic:'EVAP (PRO)', forms:[
+    'OP.PRO.EVA.F.001 Evaporation Start Up Checklist',
+    'OP.PRO.EVA.F.002 Evaporation Shutdown Checklist',
+    'OP.PRO.EVA.F.003 Evaporation Release Line Checklist',
+    'OP.PRO.EVA.F.004 Evap CIP Prepare Checklist',
+    'OP.PRO.EVA.F.005 Evaporation Leaktest Checklist',
+    'OP.PRO.EVA.F.006 Evaporation Hard Plastic & Sightglass Checklist',
+    'OP.PRO.EVA.F.007 Evaporation Gasket & Sleeve Checklist',
+    'OP.PRO.EVA.F.008 Evaporation Record',
+    'OP.PRO.EVA.F.009 Evap CIP Caustic Record',
+    'OP.PRO.EVA.F.010 Evap CIP GSE Thin & Thick Record',
+    'OP.PRO.EVA.F.011 Evap CIP Inter Record',
+    'OP.PRO.EVA.F.012 Evap Rework Consume']},
+  {stage:'Extraction', pic:'EXT (PRO)', forms:[
+    'OP.PRO.EXT.F.001 Extraction Start-Up Checklist',
+    'OP.PRO.EXT.F.002 Extraction Shutdown Checklist',
+    'OP.PRO.EXT.F.003 Extraction Changeover Checklist',
+    'OP.PRO.EXT.F.004 Extraction Cleaning Checklist',
+    'OP.PRO.EXT.F.005 Extraction Release Line Checklist',
+    'OP.PRO.EXT.F.006 CIP Prepare Checklist',
+    'OP.PRO.EXT.F.007 Extraction Inspection Checklist',
+    'OP.PRO.EXT.F.009 Extraction Centerline Checklist',
+    'OP.PRO.EXT.F.010 Extraction Valve Leak Test Record',
+    'OP.PRO.EXT.F.011 Extraction Glass And Hard Plastic Checklist',
+    'OP.PRO.EXT.F.012 Extraction Gasket, Sleeve, Filter Checklist',
+    'OP.PRO.EXT.F.013 Extraction Record',
+    'OP.PRO.EXT.F.014 CIP Record',
+    'OP.PRO.EXT.F.015 Extraction Calibration Record',
+    'OP.PRO.EXT.F.016 Extraction On Hold Record',
+    'OP.PRO.EXT.F.017 Extraction CO Monitoring Record',
+    'OP.PRO.EXT.F.018 Extraction Grinder Record',
+    'OP.PRO.EXT.F.019 Extraction Grinder Cleaning Checklist',
+    'OP.PRO.EXT.F.020 Extraction Aroma Recover Record']},
+  {stage:'Roasting', pic:'ROA (PRO)', forms:[
+    'OP.PRO.ROA.F.001 Roasting-Start Up Checklist',
+    'OP.PRO.ROA.F.002 Roasting-Shutdown Checklist',
+    'OP.PRO.ROA.F.003 Roasting-Changeover Checklist',
+    'OP.PRO.ROA.F.004 Roasting-Cleaning Check List',
+    'OP.PRO.ROA.F.005 Roasting-Release Line Checklist',
+    'OP.PRO.ROA.F.008 Roasting-Hard Plastic & Sightglass Checklist',
+    'OP.PRO.ROA.F.009 Roasting-Gasket & Sleeve Checklist',
+    'OP.PRO.ROA.F.010 Roasting Record',
+    'OP.PRO.ROA.F.011 Roasting-GC Handling Record',
+    'OP.PRO.ROA.F.012 Oil Pressing Record',
+    'FFA and PV of Roasted Oil Before & After Filtration']},
+  {stage:'Tipping', pic:'TIP (PRO)', forms:[
+    'OP.WH.TIP.F.001 Tipping Start Up Checklist',
+    'OP.WH.TIP.F.002 Tipping Shutdown Checklist',
+    'OP.WH.TIP.F.003 Tipping Green Coffee Report',
+    'OP.WH.TIP.F.004 Tipping Manual Cleaning Checklist',
+    'OP.WH.TIP.F.005 Tipping Hard Plastic & Sightglass Checklist']},
+  {stage:'Incoming Warehouse (RM/GC)', pic:'WH RM', forms:[
+    'Phiếu Nhập Kho / Goods Receipt Note',
+    'Phiếu Chuyển Kho Nội Bộ / Internal Transfer Note',
+    'Phiếu Kiểm Tra Phương Tiện Vận Chuyển']},
+  {stage:'Incoming QA Line', pic:'QA LINE', forms:[
+    'Green Cafe Bean Quality Inspection Report',
+    'Coffee Oil Material Quality Report',
+    'FFA and PV of Roasted Oil Before & After Filtration',
+    'Certificates Of Analysis (COA) for all Raw Materials',
+    'Alcohol Material Quality Report',
+    'Organic Incoming Material Compliance Check List']},
+  {stage:'Incoming QA Lab', pic:'QA LAB', forms:[
+    'Green Coffee Bean / Raw Materials Analysis Report',
+    'Lab Testing Record (Pathogen Monitoring, Physico-Chemical)']},
+  {stage:'Packaging QA', pic:'QA PM', forms:[
+    'Packaging Inspection Report']},
+  {stage:'Utility (WTP, Air, Nitrogen, Steam)', pic:'UTI', forms:[
+    'WTP Water Quality Record (daily/weekly/monthly)',
+    'Compressed Air Quality Record',
+    'Nitrogen / Gas Quality Record',
+    'Boiler / Steam Quality Record']}
+];
+
+// ---- Forward (Downstream): từ lô Nguyên/Bao bì ra Thành phẩm ----
+const SEED_FORWARD = [
+  {stage:'Incoming Warehouse', pic:'WH', forms:[
+    'OP.WH.F.004 Warehouse Materials Transfer Order',
+    'OP.WH.F.005 Warehouse Revert Goods Receipt Record',
+    'OP.WH.F.007 Warehouse Stock Count Record',
+    'OP.WH.F.008 Warehouse Stock Adjustment Record',
+    'OP.WH.F.009 Warehouse Sundry and Indirect Material Stock Card',
+    'OP.WH.TIP.F.003 Tipping Green Coffee Report']},
+  {stage:'Production', pic:'PRODUCTION', forms:[
+    'OP.PRO.FP.F.008 Coffee Extract Concentrated Packing Record',
+    'OP.PRO.FP.F.010 Freeze Dried Instant Coffee Packing Record',
+    'OP.PRO.FP.F.008 Material Consumption Record']},
+  {stage:'Release & Dispatch QA', pic:'QA', forms:[
+    'Release Checklist',
+    'Coffee Oil Inspection Report',
+    'Un-Block Decision - Finished Goods Request Form',
+    'FGs Release Decision Form']}
+];
+
+// Công đoạn dùng cho Mass Balance (theo dòng chảy sản xuất)
+const MB_STAGES = ['Incoming (GC/RM)','Tipping','Roasting','Extraction','Evaporation','Freeze Drying','Filling & Packing','Finished Goods'];
+
+/* ---- Spec bảng "Chi tiết truy xuất" theo mẫu QA.F.029 (Forward) / QA.F.030 (Backward) ----
+   Mỗi section: key, tiêu đề, nhóm cột. Cột {k:field, l:label, w:width, t:'in'|'out'|'', num:bool, gap:true}
+   Section input/output (tipping/process/packing) có cột Gap tự tính = inQty - outQty.        */
+const TRACE_SPEC = {
+  incoming:{ title:'Incoming Materials', kind:'flat', cols:[
+    {k:'matNo',l:'Material No.',w:90},{k:'material',l:'Material',w:150},{k:'supplier',l:'Supplier',w:90},
+    {k:'batch',l:'Batch No.',w:100},{k:'sscc',l:'SSCC',w:90},{k:'prodDate',l:'Production date',w:100},
+    {k:'expDate',l:'Expiry date',w:100},{k:'receiptDate',l:'Receipt date',w:100},{k:'qty',l:'Quantity (Ea/Kg)',w:100,num:true},
+    {k:'container',l:'Container No.',w:100},{k:'remark',l:'Remark',w:120}]},
+  tipping:{ title:'Tipping', kind:'io', gap:true, cols:[
+    {k:'po',l:'PO',w:90},
+    {k:'inMaterial',l:'Input Material',w:130,t:'in'},{k:'inBatch',l:'Batch No.',w:100,t:'in'},{k:'inSscc',l:'SSCC',w:80,t:'in'},
+    {k:'inProdDate',l:'Production date',w:100,t:'in'},{k:'inQty',l:'Quantity',w:90,t:'in',num:true},
+    {k:'outMaterial',l:'Output Material',w:130,t:'out'},{k:'outQty',l:'Quantity',w:90,t:'out',num:true},
+    {k:'remark',l:'Remark',w:120}]},
+  process:{ title:'Process (Roasting/Extraction/Evaporation/Freeze Drying)', kind:'io', gap:true, cols:[
+    {k:'po',l:'PO',w:90},
+    {k:'inMaterial',l:'Materials',w:130,t:'in'},{k:'inBatch',l:'Batch No.',w:100,t:'in'},{k:'inProdDate',l:'Production date',w:100,t:'in'},{k:'inQty',l:'Quantity',w:90,t:'in',num:true},
+    {k:'outMaterial',l:'Product Material',w:130,t:'out'},{k:'outBatch',l:'Batch No.',w:100,t:'out'},{k:'outSscc',l:'SSCC',w:80,t:'out'},{k:'outQty',l:'Quantity',w:90,t:'out',num:true},
+    {k:'remark',l:'Remark',w:120}]},
+  packing:{ title:'Filling and Packing', kind:'io', gap:true, cols:[
+    {k:'po',l:'PO',w:90},
+    {k:'inMaterial',l:'Semi-materials',w:130,t:'in'},{k:'inBatch',l:'Batch No.',w:100,t:'in'},{k:'inProdDate',l:'Production date',w:100,t:'in'},{k:'inQty',l:'Quantity',w:90,t:'in',num:true},
+    {k:'outMaterial',l:'Product',w:130,t:'out'},{k:'outBatch',l:'Batch No.',w:100,t:'out'},{k:'outSscc',l:'SSCC',w:80,t:'out'},{k:'outQty',l:'Quantity',w:90,t:'out',num:true},
+    {k:'remark',l:'Remark',w:120}]},
+  fgs:{ title:'FGs Warehouse', kind:'flat', cols:[
+    {k:'matNo',l:'Material No.',w:90},{k:'material',l:'Material',w:150},{k:'batch',l:'Batch No.',w:100},
+    {k:'sscc',l:'SSCC',w:110},{k:'prodDate',l:'Production date',w:100},{k:'expDate',l:'Expiry date',w:100},
+    {k:'qty',l:'Quantity (Kg)',w:90,num:true},{k:'customer',l:'Customer',w:130},{k:'deliveryStatus',l:'Delivery Status',w:100},
+    {k:'remark',l:'Remark',w:120}]}
+};
+// Thứ tự công đoạn theo chiều truy xuất
+const TRACE_ORDER = {
+  forward: ['incoming','tipping','process','packing','fgs'],
+  backward:['fgs','packing','process','tipping','incoming']
+};
+// Khởi tạo cấu trúc trace rỗng cho 1 đợt
+function newTrace(){
+  return { reason:'', participants:Array.from({length:8},()=>({name:'',dept:''})),
+    incoming:[], tipping:[], process:[], packing:[], fgs:[] };
+}
+// Tạo 1 dòng rỗng theo section
+function newTraceRow(section){ const r={}; TRACE_SPEC[section].cols.forEach(c=>r[c.k]=''); return r; }
+
+/* ============================================================================
+   [STORE] LocalStorage — auto save, backup, restore
+   ==========================================================================*/
+const Store = {
+  save(){ try{ localStorage.setItem(CFG.KEY, JSON.stringify(DB)); flashSaved(); }
+          catch(e){ toast('Lỗi lưu dữ liệu: '+e.message,'bad'); } },
+  load(){
+    try{
+      const raw = localStorage.getItem(CFG.KEY);
+      if(raw){ return JSON.parse(raw); }
+    }catch(e){ toast('Dữ liệu lưu bị lỗi, khởi tạo mới.','warn'); }
+    return null;
+  },
+  defaults(){
+    return {
+      exercises:[],            // danh sách đợt truy xuất
+      contacts:JSON.parse(JSON.stringify(SEED_CONTACTS)),
+      ccContacts:JSON.parse(JSON.stringify(SEED_CC)),
+      catalog:{ backward:JSON.parse(JSON.stringify(SEED_BACKWARD)),
+                forward:JSON.parse(JSON.stringify(SEED_FORWARD)) },
+      settings:{ maxHours:CFG.MAX_HOURS, devLimit:CFG.DEV_LIMIT, sender:defaultSender() },
+      current:null,            // id đợt đang chọn
+      log:[]                   // audit log
+    };
+  },
+  exportJSON(){
+    const blob = new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='ild_traceability_backup_'+new Date().toISOString().slice(0,10)+'.json';
+    a.click(); URL.revokeObjectURL(a.href);
+    toast('Đã tạo file backup JSON','ok');
+  },
+  importJSON(input){
+    const f=input.files[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=()=>{ try{
+        const obj=JSON.parse(r.result);
+        if(!obj.exercises||!obj.catalog) throw new Error('File không đúng định dạng');
+        DB=obj; Store.save(); Nav.go(State.tab); toast('Đã phục hồi dữ liệu','ok');
+      }catch(e){ toast('Restore lỗi: '+e.message,'bad'); }
+      input.value='';
+    };
+    r.readAsText(f);
+  }
+};
+
+/* ============================================================================
+   [STATE] Trạng thái ứng dụng
+   ==========================================================================*/
+let DB = null;                 // toàn bộ dữ liệu (persist)
+const State = { tab:'dashboard' };
+let countdownTimer = null;
+
+// Đợt đang chọn
+function currentEx(){ return DB.exercises.find(e=>e.id===DB.current) || null; }
+function logAct(msg){ DB.log.unshift({t:Date.now(),msg}); if(DB.log.length>500)DB.log.pop(); }
+
+/* ============================================================================
+   [UTILS]
+   ==========================================================================*/
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const fmtDate=ts=>ts?new Date(ts).toLocaleString('vi-VN'):'—';
+const fmtDay=ts=>ts?new Date(ts).toLocaleDateString('vi-VN'):'—';
+
+function toast(msg,kind=''){ const w=$('#toast'); const d=document.createElement('div');
+  d.className='t '+kind; d.textContent=msg; w.appendChild(d);
+  setTimeout(()=>{d.style.transition='opacity .3s';d.style.opacity='0';setTimeout(()=>d.remove(),300);},2600); }
+let saveFlash=null;
+function flashSaved(){ const p=$('#savePill'); if(!p)return; p.textContent='✓ Đã lưu';
+  clearTimeout(saveFlash); saveFlash=setTimeout(()=>p.textContent='Đã lưu',1200); }
+
+// Modal xác nhận đơn giản
+function confirmBox(title,msg,onYes,yesLabel='Xác nhận',danger=false){
+  const m=document.createElement('div'); m.id='modal';
+  m.innerHTML=`<div class="box"><h3>${esc(title)}</h3><div class="muted">${esc(msg)}</div>
+    <div class="acts"><button class="btn" id="mNo">Hủy</button>
+    <button class="btn ${danger?'danger':'pri'}" id="mYes">${esc(yesLabel)}</button></div></div>`;
+  document.body.appendChild(m);
+  $('#mNo',m).onclick=()=>m.remove();
+  $('#mYes',m).onclick=()=>{ m.remove(); onYes&&onYes(); };
+  m.onclick=e=>{ if(e.target===m)m.remove(); };
+}
+
+/* ============================================================================
+   [LOGIC] Đợt truy xuất — tính toán chung
+   ==========================================================================*/
+// Xây/đồng bộ checklist cho một đợt theo chiều truy xuất từ catalog
+function buildChecklist(dir){
+  const src = dir==='forward'?DB.catalog.forward:DB.catalog.backward;
+  return src.map(g=>({ stage:g.stage, pic:g.pic,
+    items:g.forms.map(f=>({ id:uid(), form:f, status:'', receivedAt:null, remark:'' })) }));
+}
+// Thống kê tiến độ checklist 1 đợt
+function checklistStats(ex){
+  let total=0,done=0,na=0,miss=0;
+  (ex.checklist||[]).forEach(g=>g.items.forEach(it=>{
+    total++;
+    if(it.status==='yes')done++;
+    else if(it.status==='na')na++;
+    else if(it.status==='no')miss++;
+  }));
+  const base=total-na;
+  const pct= base>0?Math.round(done/base*100):0;
+  return {total,done,na,miss,pct};
+}
+// Tiến độ theo bộ phận (PIC)
+function picProgress(ex){
+  const map={};
+  (ex.checklist||[]).forEach(g=>{
+    if(!map[g.pic])map[g.pic]={done:0,base:0};
+    g.items.forEach(it=>{ if(it.status==='na')return; map[g.pic].base++; if(it.status==='yes')map[g.pic].done++; });
+  });
+  return map;
+}
+// Trạng thái thời gian 4h
+function timeStatus(ex){
+  if(!ex.startAt) return {state:'idle',text:'Chưa bắt đầu',remainMs:null};
+  const max=(DB.settings.maxHours||4)*3600000;
+  const end=ex.startAt+max;
+  if(ex.finishAt){
+    const used=ex.finishAt-ex.startAt;
+    return {state: used<=max?'done-ok':'done-late',
+      text:(used<=max?'Hoàn thành đúng hạn':'Hoàn thành trễ')+' ('+fmtDur(used)+')', remainMs:0};
+  }
+  const remain=end-Date.now();
+  return {state: remain>0?'running':'overdue', remainMs:remain,
+    text: remain>0?'Còn lại '+fmtDur(remain):'Quá hạn '+fmtDur(-remain)};
+}
+function fmtDur(ms){ const s=Math.max(0,Math.floor(ms/1000));
+  const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(ss).padStart(2,'0'); }
+
+/* ---- Mass Balance theo logic ILD (2 stage + quy đổi basis) ----
+   Mỗi công đoạn: INPUT, Downgrade, Thất thoát(loss), Lấy mẫu(sampling), In stock,
+   Output lý thuyết = INPUT − Downgrade − Loss − Sampling − Instock,
+   Tỉ lệ thu hồi = Output thực tế / Output lý thuyết, Gap = 1 − Tỉ lệ thu hồi.
+   STAGE 1 quy về GC: công đoạn sau rang (roasted=true) chia hệ số rang (÷0.84).
+   STAGE 2 quy về Total Solid: FGs (isFG=true) nhân hệ số solid (×0.97).
+   Overall = N1 × N9 × N2 ; Unknown deviation = |1 − N1×N2| (mục tiêu <0.5%).            */
+function mkStageRow(stage,flags){ return Object.assign(
+  {stage,batch:'',nsx:'',po:'',input:'',downgrade:'',loss:'',sampling:'',instock:'',actualOut:'',record:'',remark:''}, flags||{}); }
+function newMass(){
+  return {
+    factors:{ roastYield:0.84, fgSolid:0.97 },
+    solidFromExtraction:'',   // M9 — Tổng Solid từ Extraction thực tế (kg)
+    reworkAddSolid:'',        // cộng thêm vào Output thực tế FGs (nếu có), basis solid
+    unknownLimit:0.5,         // % ngưỡng unknown deviation
+    stage1:[ mkStageRow('Nhập hàng',{roasted:false}), mkStageRow('Tipping',{roasted:false}),
+             mkStageRow('Roaster',{roasted:true}),     mkStageRow('Grinder',{roasted:true}) ],
+    stage2:[ mkStageRow('Extraction',{isFG:false}), mkStageRow('Evaporation',{isFG:false}),
+             mkStageRow('FMT',{isFG:false}),         mkStageRow('FGs',{isFG:true}) ],
+    note:''
+  };
+}
+// Tính tổng hợp 1 nhóm stage với hệ số quy đổi từng dòng
+function stageSummary(rows,convFn){
+  const s={input:+rows[0].input||0, dg:0, loss:0, samp:0, stock:0};
+  rows.forEach(r=>{ const k=convFn(r);
+    s.dg+=(+r.downgrade||0)*k; s.loss+=(+r.loss||0)*k; s.samp+=(+r.sampling||0)*k; s.stock+=(+r.instock||0)*k; });
+  s.theo = s.input - (s.dg+s.loss+s.samp) - s.stock;   // Output lý thuyết
+  return s;
+}
+function massCalc(ex){
+  const m=ex.mass&&ex.mass.stage1 ? ex.mass : (ex.mass=newMass());
+  const RY=+m.factors.roastYield||0.84, FG=+m.factors.fgSolid||0.97;
+  const conv1=r=>r.roasted?(RY?1/RY:0):1;   // quy về GC
+  const conv2=r=>r.isFG?FG:1;               // quy về Total Solid
+  // Stage 1 (GC)
+  const s1=stageSummary(m.stage1,conv1);
+  const lastG=m.stage1[m.stage1.length-1];
+  s1.actual=(+lastG.actualOut||0)*conv1(lastG);
+  s1.recovery=s1.theo? s1.actual/s1.theo : 0;
+  s1.gap=1-s1.recovery;
+  // GC -> Solid
+  const M9=+m.solidFromExtraction||0;
+  const N9= s1.actual? M9/s1.actual : 0;
+  // Stage 2 (Total Solid)
+  const s2=stageSummary(m.stage2,conv2);
+  const lastF=m.stage2[m.stage2.length-1];
+  s2.actual=((+lastF.actualOut||0)+(+m.reworkAddSolid||0))*conv2(lastF);
+  s2.recovery=s2.theo? s2.actual/s2.theo : 0;
+  s2.gap=1-s2.recovery;
+  // Tổng hợp
+  const overall = s1.recovery * N9 * s2.recovery;              // hệ số chuyển đổi tổng
+  const hasData = (+m.stage1[0].input||0)>0 && (+lastG.actualOut||0)>0;
+  const unknownDev = Math.abs(1 - s1.recovery*s2.recovery)*100; // %
+  const limit=+m.unknownLimit||0.5;
+  return {RY,FG,s1,N9,M9,s2,overall,unknownDev,limit,hasData};
+}
+
+// Đánh giá kết quả đợt (đạt/không) theo 4 tiêu chí BRC
+function evalExercise(ex){
+  const cs=checklistStats(ex);
+  const ts=timeStatus(ex);
+  const mc=massCalc(ex);
+  const onTime = ts.state==='done-ok';
+  const complete = cs.miss===0 && cs.done>0;
+  const massOk = mc.hasData && mc.unknownDev<=mc.limit;
+  const pass = onTime && complete && massOk;
+  return {onTime,complete,massOk,pass,cs,ts,mc};
+}
+
+/* ============================================================================
+   [UI] Điều hướng tab
+   ==========================================================================*/
+const Nav = {
+  go(tab){
+    State.tab=tab; DB.current && Store.save();
+    $$('.navbtn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+    $$('.page').forEach(p=>p.classList.add('hidden'));
+    $('#tab-'+tab).classList.remove('hidden');
+    stopCountdown();
+    ({dashboard:renderDashboard,exercise:renderExercise,email:renderEmail,
+      checklist:renderChecklist,trace:renderTrace,mass:renderMass,report:renderReport,settings:renderSettings}[tab])();
+    $('#view').scrollTop=0;
+  }
+};
+
+/* ---------------------------- DASHBOARD ---------------------------------- */
+function renderDashboard(){
+  const ex=DB.exercises;
+  const total=ex.length;
+  const passed=ex.filter(e=>e.status==='closed'&&evalExercise(e).pass).length;
+  const running=ex.filter(e=>e.startAt&&!e.finishAt&&e.status!=='closed').length;
+  const thisYear=ex.filter(e=>new Date(e.createdAt).getFullYear()===new Date().getFullYear()).length;
+  const passRate= total?Math.round(passed/total*100):0;
+
+  $('#tab-dashboard').innerHTML=`
+    <div class="page-h"><h2>Dashboard</h2>
+      <span class="desc">Tổng quan hoạt động truy xuất — mục tiêu ≥ 2 đợt/năm, hoàn thành ≤ ${DB.settings.maxHours}h.</span>
+      <span class="spacer"></span>
+      <button class="btn pri" onclick="Ex.create()">+ Đợt truy xuất mới</button></div>
+
+    <div class="grid g4">
+      <div class="card kpi"><span class="ic">▶</span><div class="n">${total}</div><div class="l">Tổng số đợt</div></div>
+      <div class="card kpi"><span class="ic">✓</span><div class="n" style="color:var(--ok)">${passed}</div><div class="l">Đạt yêu cầu (đã đóng)</div></div>
+      <div class="card kpi"><span class="ic">⧗</span><div class="n" style="color:var(--warn)">${running}</div><div class="l">Đang thực hiện</div></div>
+      <div class="card kpi"><span class="ic">📅</span><div class="n">${thisYear}</div><div class="l">Đợt trong năm ${new Date().getFullYear()}</div></div>
+    </div>
+
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card pad">
+        <h3>Tỷ lệ đạt</h3>
+        <div style="display:flex;align-items:center;gap:16px;margin-top:12px">
+          <div style="font-size:38px;font-weight:800;color:${passRate>=80?'var(--ok)':passRate>=50?'var(--warn)':'var(--bad)'}">${passRate}%</div>
+          <div style="flex:1"><div class="bar ${passRate>=80?'ok':passRate>=50?'warn':''}"><i style="width:${passRate}%"></i></div>
+          <div class="muted" style="font-size:12px;margin-top:6px">${passed}/${total} đợt đã đóng đạt cả 3 tiêu chí (đúng hạn · đủ hồ sơ · cân bằng khối)</div></div>
+        </div>
+      </div>
+      <div class="card pad">
+        <h3>Nhắc việc</h3>
+        <div style="margin-top:10px">${dashReminders(ex)}</div>
+      </div>
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between"><h3>Các đợt truy xuất gần đây</h3></div>
+      ${ex.length? dashTable(ex): emptyBox('Chưa có đợt truy xuất nào','Bấm “+ Đợt truy xuất mới” để bắt đầu.')}
+    </div>`;
+  $('#bg-ex').textContent=total;
+}
+function dashReminders(ex){
+  const items=[];
+  const yr=new Date().getFullYear();
+  const inYear=ex.filter(e=>new Date(e.createdAt).getFullYear()===yr).length;
+  if(inYear<2) items.push(`<div class="row"><span class="tag warn">Tần suất</span> Năm ${yr} mới có <b>${inYear}</b> đợt — yêu cầu tối thiểu <b>2 đợt/năm</b>.</div>`);
+  ex.filter(e=>e.startAt&&!e.finishAt&&e.status!=='closed').forEach(e=>{
+    const ts=timeStatus(e);
+    if(ts.state==='overdue') items.push(`<div class="row"><span class="tag bad">Quá hạn 4h</span> ${esc(e.batch||'(chưa có batch)')} — ${ts.text}.</div>`);
+    else items.push(`<div class="row"><span class="tag b">Đang chạy</span> ${esc(e.batch||'(batch)')} — ${ts.text}.</div>`);
+  });
+  const openMiss=ex.filter(e=>e.status!=='closed'&&checklistStats(e).miss>0);
+  openMiss.forEach(e=>items.push(`<div class="row"><span class="tag warn">Thiếu hồ sơ</span> ${esc(e.batch||'(batch)')} — còn <b>${checklistStats(e).miss}</b> biểu mẫu chưa có.</div>`));
+  return items.length?items.slice(0,6).map(x=>`<div style="padding:6px 0;border-bottom:1px solid var(--line)">${x}</div>`).join(''):'<div class="muted">Không có nhắc việc. 👍</div>';
+}
+function dashTable(ex){
+  const rows=[...ex].sort((a,b)=>b.createdAt-a.createdAt).slice(0,12).map(e=>{
+    const cs=checklistStats(e),ev=evalExercise(e);
+    const st = e.status==='closed'?(ev.pass?'<span class="tag ok">Đạt</span>':'<span class="tag bad">Không đạt</span>')
+      : e.startAt?'<span class="tag b">Đang chạy</span>':'<span class="tag na">Nháp</span>';
+    return `<tr style="cursor:pointer" onclick="Ex.open('${e.id}')">
+      <td><b>${esc(e.batch||'—')}</b><div class="muted" style="font-size:12px">${esc(e.material||'')}</div></td>
+      <td>${e.dir==='forward'?'<span class="tag b">Forward</span>':'<span class="tag b">Backward</span>'}</td>
+      <td>${esc(e.purpose||'—')}</td>
+      <td>${fmtDay(e.createdAt)}</td>
+      <td><div class="bar ${cs.pct>=100?'ok':''}" style="width:90px"><i style="width:${cs.pct}%"></i></div><span class="muted" style="font-size:12px">${cs.pct}%</span></td>
+      <td>${st}</td></tr>`;
+  }).join('');
+  return `<table class="tbl" style="margin-top:8px"><thead><tr>
+    <th>Batch / Material</th><th>Chiều</th><th>Mục đích</th><th>Ngày tạo</th><th>Hồ sơ</th><th>Trạng thái</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+function emptyBox(t,s){ return `<div class="empty"><div class="big">▦</div><div style="font-weight:700">${esc(t)}</div><div class="muted">${esc(s)}</div></div>`; }
+
+/* ---------------------------- ĐỢT TRUY XUẤT ------------------------------ */
+const Ex = {
+  create(){
+    const ex={ id:uid(), createdAt:Date.now(), status:'draft',
+      batch:'', material:'', matNo:'', purpose:'Bài tập định kỳ', scenario:'',
+      dir:'backward', startAt:null, finishAt:null,
+      checklist:buildChecklist('backward'),
+      mass:newMass(),
+      trace:newTrace(),
+      capa:'', conclusion:'' };
+    DB.exercises.push(ex); DB.current=ex.id; logAct('Tạo đợt truy xuất mới');
+    Store.save(); Nav.go('exercise');
+  },
+  open(id){ DB.current=id; Store.save(); Nav.go('exercise'); },
+  del(id){ confirmBox('Xóa đợt truy xuất','Toàn bộ dữ liệu đợt này sẽ bị xóa vĩnh viễn.',()=>{
+      DB.exercises=DB.exercises.filter(e=>e.id!==id);
+      if(DB.current===id)DB.current=DB.exercises[0]?.id||null;
+      logAct('Xóa 1 đợt truy xuất'); Store.save(); Nav.go('exercise'); toast('Đã xóa','ok');
+    },'Xóa','danger'); },
+  duplicate(id){ const s=DB.exercises.find(e=>e.id===id); if(!s)return;
+    const c=JSON.parse(JSON.stringify(s)); c.id=uid(); c.createdAt=Date.now(); c.status='draft';
+    c.startAt=null; c.finishAt=null; c.batch=(s.batch||'')+' (copy)';
+    // reset trạng thái checklist
+    c.checklist.forEach(g=>g.items.forEach(it=>{it.status='';it.receivedAt=null;it.remark='';}));
+    DB.exercises.push(c); DB.current=c.id; Store.save(); Nav.go('exercise'); toast('Đã nhân bản đợt','ok');
+  },
+  setDir(id,dir){ const e=DB.exercises.find(x=>x.id===id); if(!e)return;
+    if(e.dir===dir)return;
+    confirmBox('Đổi chiều truy xuất','Đổi chiều sẽ dựng lại checklist theo danh mục '+(dir==='forward'?'Forward':'Backward')+'. Trạng thái checklist hiện tại sẽ bị đặt lại. Tiếp tục?',()=>{
+      e.dir=dir; e.checklist=buildChecklist(dir); Store.save(); Nav.go('exercise'); toast('Đã đổi chiều & dựng lại checklist','ok');
+    });
+  },
+  start(id){ const e=DB.exercises.find(x=>x.id===id); if(!e)return;
+    if(!e.batch){toast('Nhập Batch no. trước khi bắt đầu','warn');return;}
+    e.startAt=Date.now(); e.finishAt=null; e.status='running'; logAct('Bắt đầu đếm giờ truy xuất '+e.batch);
+    Store.save(); Nav.go('exercise'); toast('Đã bắt đầu — đồng hồ 4h chạy','ok'); },
+  finish(id){ const e=DB.exercises.find(x=>x.id===id); if(!e)return;
+    e.finishAt=Date.now(); logAct('Kết thúc thu thập '+e.batch); Store.save(); Nav.go('exercise'); toast('Đã ghi mốc hoàn thành','ok'); },
+  close(id){ const e=DB.exercises.find(x=>x.id===id); if(!e)return;
+    const ev=evalExercise(e);
+    confirmBox('Đóng đợt truy xuất', 'Kết quả đánh giá: '+(ev.pass?'ĐẠT':'KHÔNG ĐẠT')+'. Sau khi đóng bạn vẫn có thể mở lại để chỉnh.',()=>{
+      e.status='closed'; if(!e.finishAt)e.finishAt=Date.now(); Store.save(); Nav.go('report'); toast('Đã đóng đợt','ok');
+    },'Đóng đợt'); },
+  reopen(id){ const e=DB.exercises.find(x=>x.id===id); if(!e)return; e.status='running'; Store.save(); Nav.go('exercise'); },
+  field(id,k,v){ const e=DB.exercises.find(x=>x.id===id); if(!e)return; e[k]=v; Store.save(); }
+};
+
+function renderExercise(){
+  const wrap=$('#tab-exercise');
+  const ex=currentEx();
+  // Danh sách chọn đợt
+  const picker=`<div class="card pad" style="margin-bottom:14px">
+    <div class="row" style="justify-content:space-between">
+      <div class="row">
+        <label class="fld" style="margin:0"><span class="lb">Chọn đợt truy xuất</span>
+          <select class="in" style="min-width:340px" onchange="Ex.open(this.value)">
+            ${DB.exercises.length? DB.exercises.slice().sort((a,b)=>b.createdAt-a.createdAt).map(e=>
+              `<option value="${e.id}" ${e.id===DB.current?'selected':''}>${esc(e.batch||'(nháp)')} · ${e.dir} · ${fmtDay(e.createdAt)}</option>`).join('')
+              :'<option>— chưa có đợt nào —</option>'}
+          </select></label>
+      </div>
+      <div class="row">
+        <button class="btn pri" onclick="Ex.create()">+ Đợt mới</button>
+        ${ex?`<button class="btn sm" onclick="Ex.duplicate('${ex.id}')">⧉ Nhân bản</button>
+        <button class="btn sm danger" onclick="Ex.del('${ex.id}')">🗑 Xóa</button>`:''}
+      </div>
+    </div></div>`;
+
+  if(!ex){ wrap.innerHTML=`<div class="page-h"><h2>Đợt truy xuất</h2></div>${picker}
+    ${emptyBox('Chưa có đợt nào được chọn','Tạo đợt mới để nhập thông tin lô và bắt đầu truy xuất.')}`; return; }
+
+  const ts=timeStatus(ex);
+  const cs=checklistStats(ex);
+  const dirSeg=`<div class="seg">
+    <button class="${ex.dir==='backward'?'on':''}" onclick="Ex.setDir('${ex.id}','backward')">◀ Backward (ngược)</button>
+    <button class="${ex.dir==='forward'?'on':''}" onclick="Ex.setDir('${ex.id}','forward')">Forward (xuôi) ▶</button></div>`;
+
+  wrap.innerHTML=`
+  <div class="page-h"><h2>Đợt truy xuất</h2>
+    <span class="desc">Nhập thông tin lô, chọn chiều & bấm bắt đầu để chạy đồng hồ 4 giờ.</span></div>
+  ${picker}
+
+  <div class="grid g2">
+    <div class="card pad">
+      <h3>Thông tin lô truy xuất</h3><hr class="hr">
+      <div class="grid g2">
+        <label class="fld"><span class="lb">Batch no. *</span>
+          <input class="in" value="${esc(ex.batch)}" oninput="Ex.field('${ex.id}','batch',this.value);qUpd()"></label>
+        <label class="fld"><span class="lb">Material no.</span>
+          <input class="in" value="${esc(ex.matNo)}" oninput="Ex.field('${ex.id}','matNo',this.value)"></label>
+      </div>
+      <label class="fld"><span class="lb">Material description</span>
+        <input class="in" value="${esc(ex.material)}" oninput="Ex.field('${ex.id}','material',this.value)"></label>
+      <div class="grid g2">
+        <label class="fld"><span class="lb">Mục đích</span>
+          <select class="in" onchange="Ex.field('${ex.id}','purpose',this.value)">
+            ${['Bài tập định kỳ','Chuẩn bị Organic Audit','Chuẩn bị BRC/FSSC Audit','Mô phỏng thu hồi (Recall/Withdrawal)','Điều tra khiếu nại','Khác'].map(p=>`<option ${ex.purpose===p?'selected':''}>${p}</option>`).join('')}
+          </select></label>
+        <label class="fld"><span class="lb">Chiều truy xuất</span><div>${dirSeg}</div></label>
+      </div>
+      <label class="fld"><span class="lb">Tình huống giả lập</span>
+        <textarea class="in" placeholder="VD: SP thành phẩm bị nhiễm Pesticide..." oninput="Ex.field('${ex.id}','scenario',this.value)">${esc(ex.scenario)}</textarea></label>
+    </div>
+
+    <div class="card pad">
+      <h3>Đồng hồ & Tiến độ</h3><hr class="hr">
+      <div style="text-align:center;padding:8px 0">
+        <div class="muted" style="font-size:12px">Thời gian còn lại (giới hạn ${DB.settings.maxHours}h)</div>
+        <div id="cd" class="count ${ts.state==='overdue'||ts.state==='done-late'?'bad':ts.state==='running'?'warn':'ok'}">${ts.remainMs!=null?fmtDur(Math.abs(ts.remainMs)):'—:—:—'}</div>
+        <div class="muted" id="cdTxt" style="font-size:12.5px">${esc(ts.text)}</div>
+      </div>
+      <div class="row" style="justify-content:center;margin:10px 0">
+        ${!ex.startAt?`<button class="btn pri" onclick="Ex.start('${ex.id}')">▶ Bắt đầu (chạy 4h)</button>`:''}
+        ${ex.startAt&&!ex.finishAt?`<button class="btn ok" onclick="Ex.finish('${ex.id}')">■ Ghi mốc hoàn thành</button>`:''}
+        ${ex.finishAt?`<span class="tag ${ts.state==='done-ok'?'ok':'bad'}">${ts.state==='done-ok'?'Đúng hạn':'Trễ hạn'}</span>`:''}
+      </div>
+      <hr class="hr">
+      <div class="muted" style="font-size:12px;margin-bottom:4px">Hồ sơ thu thập</div>
+      <div class="bar ${cs.pct>=100?'ok':''}"><i style="width:${cs.pct}%"></i></div>
+      <div class="row" style="justify-content:space-between;margin-top:6px;font-size:12.5px">
+        <span>Đã có <b>${cs.done}</b> · Thiếu <b style="color:var(--bad)">${cs.miss}</b> · N/A ${cs.na}</span>
+        <b>${cs.pct}%</b></div>
+      <hr class="hr">
+      <div class="row">
+        <button class="btn sm" onclick="Nav.go('email')">✉ Soạn email yêu cầu</button>
+        <button class="btn sm" onclick="Nav.go('checklist')">☑ Checklist hồ sơ</button>
+        <button class="btn sm" onclick="Nav.go('mass')">⚖ Mass balance</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card pad" style="margin-top:14px">
+    <div class="row" style="justify-content:space-between">
+      <h3>Kết luận & CAPA</h3>
+      <div class="row">
+        ${ex.status!=='closed'?`<button class="btn ok" onclick="Ex.close('${ex.id}')">✓ Đóng đợt & đánh giá</button>`
+          :`<button class="btn" onclick="Ex.reopen('${ex.id}')">↩ Mở lại</button>`}
+        <button class="btn pri" onclick="Nav.go('report')">▤ Xem báo cáo</button>
+      </div>
+    </div><hr class="hr">
+    <label class="fld"><span class="lb">Đánh giá hiệu quả / Kết luận</span>
+      <textarea class="in" oninput="Ex.field('${ex.id}','conclusion',this.value)">${esc(ex.conclusion)}</textarea></label>
+    <label class="fld"><span class="lb">Hành động khắc phục / cải tiến (CAPA)</span>
+      <textarea class="in" oninput="Ex.field('${ex.id}','capa',this.value)">${esc(ex.capa)}</textarea></label>
+  </div>`;
+
+  if(ex.startAt&&!ex.finishAt) startCountdown(ex);
+}
+// cập nhật badge batch trong picker khi gõ
+function qUpd(){ $('#bg-ex') && ($('#bg-ex').textContent=DB.exercises.length); }
+
+function startCountdown(ex){
+  stopCountdown();
+  const tick=()=>{ const ts=timeStatus(ex); const cd=$('#cd'),tx=$('#cdTxt');
+    if(!cd){stopCountdown();return;}
+    cd.textContent=fmtDur(Math.abs(ts.remainMs));
+    cd.className='count '+(ts.state==='overdue'?'bad':'warn');
+    tx.textContent=ts.text;
+  };
+  tick(); countdownTimer=setInterval(tick,1000);
+}
+function stopCountdown(){ if(countdownTimer){clearInterval(countdownTimer);countdownTimer=null;} }
+
+/* ---------------------------- SOẠN EMAIL --------------------------------- */
+function renderEmail(){
+  const ex=currentEx();
+  const wrap=$('#tab-email');
+  if(!ex){ wrap.innerHTML=`<div class="page-h"><h2>Soạn email yêu cầu truy xuất</h2></div>
+    ${emptyBox('Chưa chọn đợt truy xuất','Vào tab “Đợt truy xuất” để tạo/chọn đợt trước.')}`; return; }
+  const body=buildEmail(ex);
+  const to=DB.contacts.map(c=>c.email).join('; ');
+  const cc=(DB.ccContacts||[]).map(c=>c.email).join('; ');
+  wrap.innerHTML=`
+    <div class="page-h"><h2>Soạn email yêu cầu truy xuất</h2>
+      <span class="desc">Nội dung tự sinh theo mẫu QA. Bấm <b>Tạo email Outlook (.eml)</b> → mở file → thư nháp đã sẵn, chỉ bấm Send.</span></div>
+    <div class="grid g2">
+      <div class="card pad">
+        <div class="row" style="justify-content:space-between"><h3>Người nhận (To)</h3>
+          <span class="tag b">${DB.contacts.length} người</span></div><hr class="hr">
+        <div style="max-height:200px;overflow:auto">
+        ${DB.contacts.map(c=>`<div class="row" style="justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line)">
+          <span><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.dept)}</span></span>
+          <span class="muted" style="font-size:12px">${esc(c.email)}</span></div>`).join('')}
+        </div>
+        <label class="fld" style="margin-top:10px"><span class="lb">To</span>
+          <textarea class="in" id="emTo" style="min-height:48px">${esc(to)}</textarea></label>
+        <label class="fld"><span class="lb">Cc</span>
+          <textarea class="in" id="emCc" style="min-height:40px">${esc(cc)}</textarea></label>
+        <div class="row"><button class="btn sm" onclick="copyEl('emTo')">Copy To</button>
+          <button class="btn sm" onclick="copyEl('emCc')">Copy Cc</button></div>
+      </div>
+      <div class="card pad">
+        <div class="row" style="justify-content:space-between"><h3>Nội dung email</h3>
+          <div class="row">
+            <button class="btn sm" onclick="copyEl('emSubj')">Copy tiêu đề</button>
+            <button class="btn sm" onclick="copyEl('emBody')">Copy nội dung</button>
+          </div></div><hr class="hr">
+        <label class="fld"><span class="lb">Subject</span>
+          <input class="in" id="emSubj" value="${esc(emailSubject(ex))}"></label>
+        <label class="fld"><span class="lb">Body</span>
+          <textarea class="in" id="emBody" style="min-height:360px;font-family:Consolas,monospace;font-size:12.5px">${esc(body)}</textarea></label>
+        <div class="row" style="margin-top:4px">
+          <button class="btn pri" onclick="Email.eml()">📧 Tạo email Outlook (.eml)</button>
+          <button class="btn" onclick="Email.mailto()">Mở nhanh (mailto)</button>
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:6px">File .eml mở bằng Outlook sẽ là thư nháp đã điền sẵn To/Cc/Subject/Nội dung — chỉ cần đính kèm Annex 1 (nếu cần) và bấm <b>Send</b>. Tiếng Việt hiển thị đúng.</div>
+      </div>
+    </div>`;
+}
+// Tiêu đề email theo mục đích (bám mẫu QA)
+function emailSubject(ex){
+  const b=ex.batch||'............';
+  const p=(ex.purpose||'').toLowerCase();
+  if(p.includes('organic')) return 'QA - TRUY XUẤT NGUỒN GỐC CHO ORGANIC - BATCH: '+b;
+  if(p.includes('recall')||p.includes('thu hồi')) return 'QA - TRUY XUẤT PHỤC VỤ THU HỒI - BATCH: '+b;
+  return 'QA - DIỄN TẬP TRUY XUẤT NGUỒN GỐC - BATCH: '+b;
+}
+// Tạo nội dung email theo mẫu iLD
+function buildEmail(ex){
+  const s = (DB.settings.sender)||defaultSender();
+  const dirLine = ex.dir==='forward'
+    ? 'Truy xuất xuôi lô nguyên liệu/bao bì bên dưới:'
+    : 'Truy xuất ngược mẻ thành phẩm bên dưới:';
+  const sign = [ s.name, s.title,
+    s.mobile?('Mobile: '+s.mobile):'', s.email?('E-Mail: '+s.email):'', '',
+    s.company, s.address ].filter(x=>x!==undefined&&x!==null&&x!=='').join('\n');
+  return `Dear all,
+
+${s.short||s.name||'QA'} xin gửi yêu cầu truy xuất, bộ phận vui lòng cung cấp những thông tin, hồ sơ liên quan đến ${ex.dir==='forward'?'lô':'mẻ thành phẩm'} bên dưới:
+
+* ${dirLine}
+Batch no.            : ${ex.batch||'............'}
+Material no.         : ${ex.matNo||'............'}
+Material Description : ${ex.material||'............'}
+
+* Mục đích: ${ex.purpose||'............'}
+
+* Tình huống giả lập: ${ex.scenario||'............'}
+
+Dear anh @Truong Tran, @Canh Le, @Quang Nguyen,
+* Vui lòng cung cấp toàn bộ hồ sơ của lô hàng này, thông tin stock hoặc thông tin xuất hàng.
+* Cung cấp hồ sơ Incoming GC và hồ sơ TIP 2 mẻ này.
+
+Dear chị @Thong Nguyen, @Khanh Nguyen,
+Vui lòng cung cấp toàn bộ hồ sơ thông tin Logistic xuất hàng: Packing List, Invoice, Contract, Tờ khai thông quan, B/L Number.
+
+Dear anh @Vu Le,
+Vui lòng em thông tin ngày SX, thông tin nguyên liệu Consume của FP và hồ sơ sản xuất.
+
+Dear anh @Minh Thai & chị @Cam Do,
+Vui lòng cung cấp hồ sơ liên quan tới QA LAB & Line liên quan tới mẻ FGs này.
+
+Dear anh @Hung Le, @Nam Tran,
+Anh Hùng cho em thông tin hồ sơ chất lượng WTP, Khí nén & Nitrogen.
+
+Note:
+1. Thời gian thực hiện: ${DB.settings.maxHours} giờ, bắt đầu khi có email yêu cầu truy xuất từ QA, kết thúc khi bộ phận cuối cùng cung cấp tất cả hồ sơ liên quan cho QA.
+2. Yêu cầu:
++ Đầy đủ hồ sơ (Bộ phận photo hồ sơ liên quan, gửi lại cho QA bản photo)
++ Có sự liên kết mạch lạc hồ sơ, rõ ràng của từng quá trình chế biến, di chuyển của sản phẩm
++ Đúng số lượng/cân bằng khối.
+3. Danh mục hồ sơ cần cho quá trình truy xuất – theo file đính kèm.
+
+Thanks & Best Regards,
+${sign}`;
+}
+function copyEl(id){ const el=$('#'+id); el.select(); el.setSelectionRange(0,99999);
+  try{ document.execCommand('copy'); toast('Đã copy','ok'); }
+  catch(e){ navigator.clipboard&&navigator.clipboard.writeText(el.value); toast('Đã copy','ok'); }
+  window.getSelection().removeAllRanges(); }
+
+/* ---- Tạo file email .eml (RFC822) mở sẵn trong Outlook (X-Unsent:1) ---- */
+const Email = {
+  b64(s){ return btoa(unescape(encodeURIComponent(s))); },   // base64 chuẩn UTF-8
+  fold(s){ return s.replace(/(.{76})/g,'$1\r\n'); },          // gấp dòng base64 76 ký tự
+  buildEML(subject,to,cc,body){
+    let h='';
+    h+='X-Unsent: 1\r\n';                 // Outlook mở như thư nháp CHƯA gửi -> chỉ bấm Send
+    h+='To: '+to+'\r\n';
+    if(cc) h+='Cc: '+cc+'\r\n';
+    h+='Date: '+new Date().toUTCString()+'\r\n';
+    h+='Subject: =?UTF-8?B?'+this.b64(subject)+'?=\r\n';
+    h+='MIME-Version: 1.0\r\n';
+    h+='Content-Type: text/plain; charset="UTF-8"\r\n';
+    h+='Content-Transfer-Encoding: base64\r\n';
+    h+='\r\n';
+    h+=this.fold(this.b64(body))+'\r\n';
+    return h;
+  },
+  eml(){
+    const eml=this.buildEML($('#emSubj').value, $('#emTo').value.trim(), $('#emCc').value.trim(), $('#emBody').value);
+    const blob=new Blob([eml],{type:'message/rfc822'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='QA_TruyXuat_'+((currentEx()&&currentEx().batch)||'batch')+'.eml';
+    a.click(); URL.revokeObjectURL(a.href);
+    logAct('Tạo email .eml truy xuất'); toast('Đã tạo file .eml — mở bằng Outlook rồi bấm Send','ok');
+  },
+  mailto(){ const to=$('#emTo').value.split(/[;,]/).map(s=>s.trim()).filter(Boolean).join(',');
+    const cc=$('#emCc').value.split(/[;,]/).map(s=>s.trim()).filter(Boolean).join(',');
+    const s=encodeURIComponent($('#emSubj').value), b=encodeURIComponent($('#emBody').value);
+    window.location.href=`mailto:${to}?cc=${cc}&subject=${s}&body=${b}`; }
+};
+
+/* ---------------------------- CHECKLIST HỒ SƠ ---------------------------- */
+let clFilter='all';
+function renderChecklist(){
+  const ex=currentEx();
+  const wrap=$('#tab-checklist');
+  if(!ex){ wrap.innerHTML=`<div class="page-h"><h2>Checklist hồ sơ truy xuất</h2></div>
+    ${emptyBox('Chưa chọn đợt truy xuất','Tạo/chọn đợt ở tab “Đợt truy xuất”.')}`; return; }
+  const cs=checklistStats(ex);
+  const pics=picProgress(ex);
+  wrap.innerHTML=`
+    <div class="page-h"><h2>Checklist hồ sơ — ${ex.dir==='forward'?'Forward (xuôi)':'Backward (ngược)'}</h2>
+      <span class="desc">Batch ${esc(ex.batch||'(chưa nhập)')} · Đánh dấu trạng thái từng biểu mẫu theo công đoạn/PIC.</span>
+      <span class="spacer"></span>
+      <button class="btn sm" onclick="Cl.setAll('${ex.id}','yes')">Đánh dấu tất cả: Có</button>
+      <button class="btn sm" onclick="Cl.exportCSV('${ex.id}')">⬇ Xuất CSV</button>
+    </div>
+
+    <div class="grid g4" style="margin-bottom:12px">
+      <div class="card kpi"><div class="n">${cs.total}</div><div class="l">Tổng biểu mẫu</div></div>
+      <div class="card kpi"><div class="n" style="color:var(--ok)">${cs.done}</div><div class="l">Đã có</div></div>
+      <div class="card kpi"><div class="n" style="color:var(--bad)">${cs.miss}</div><div class="l">Thiếu / Không có</div></div>
+      <div class="card kpi"><div class="n">${cs.pct}%</div><div class="l">Hoàn thành</div></div>
+    </div>
+
+    <div class="card pad" style="margin-bottom:12px">
+      <h3>Tiến độ theo bộ phận</h3>
+      <div class="grid g3" style="margin-top:10px">
+        ${Object.entries(pics).map(([pic,v])=>{const p=v.base?Math.round(v.done/v.base*100):0;
+          return `<div><div class="row" style="justify-content:space-between;font-size:12.5px"><b>${esc(pic)}</b><span>${v.done}/${v.base}</span></div>
+          <div class="bar ${p>=100?'ok':p>0?'warn':''}"><i style="width:${p}%"></i></div></div>`;}).join('')}
+      </div>
+    </div>
+
+    <div class="card pad">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <div class="seg">
+          ${[['all','Tất cả'],['miss','Còn thiếu'],['done','Đã có']].map(f=>
+            `<button class="${clFilter===f[0]?'on':''}" onclick="Cl.filter('${f[0]}')">${f[1]}</button>`).join('')}
+        </div>
+        <span class="muted" style="font-size:12px">Nhấp trạng thái để đổi: Có → Không → N/A</span>
+      </div>
+      <div style="overflow:auto;max-height:60vh">
+      <table class="tbl"><thead><tr>
+        <th style="width:44px">#</th><th>Biểu mẫu</th><th style="width:120px">Trạng thái</th>
+        <th style="width:150px">Thời điểm nhận</th><th style="width:200px">Ghi chú</th></tr></thead>
+        <tbody>${clRows(ex)}</tbody></table>
+      </div>
+    </div>`;
+}
+function clRows(ex){
+  let n=0,html='';
+  (ex.checklist||[]).forEach((g,gi)=>{
+    const visItems=g.items.filter(it=> clFilter==='all' || (clFilter==='miss'&&it.status!=='yes'&&it.status!=='na') || (clFilter==='done'&&it.status==='yes'));
+    if(!visItems.length)return;
+    html+=`<tr class="stage-row"><td colspan="5">${esc(g.stage)} <span class="tag na" style="margin-left:6px">${esc(g.pic)}</span></td></tr>`;
+    g.items.forEach((it,ii)=>{
+      if(clFilter==='miss'&&(it.status==='yes'||it.status==='na'))return;
+      if(clFilter==='done'&&it.status!=='yes')return;
+      n++;
+      const stTag = it.status==='yes'?'<span class="tag ok">Có sẵn</span>'
+        : it.status==='no'?'<span class="tag bad">Không có</span>'
+        : it.status==='na'?'<span class="tag na">N/A</span>'
+        : '<span class="tag na">— chưa —</span>';
+      html+=`<tr>
+        <td>${n}</td>
+        <td>${esc(it.form)}</td>
+        <td><button class="btn sm" style="padding:3px 8px" onclick="Cl.cycle('${ex.id}',${gi},${ii})">${stTag}</button></td>
+        <td>${it.receivedAt?fmtDate(it.receivedAt):'<span class="muted">—</span>'}</td>
+        <td><input class="in" style="padding:5px 8px" value="${esc(it.remark)}" oninput="Cl.remark('${ex.id}',${gi},${ii},this.value)"></td>
+      </tr>`;
+    });
+  });
+  return html || `<tr><td colspan="5"><div class="empty"><div class="muted">Không có mục nào khớp bộ lọc.</div></div></td></tr>`;
+}
+const Cl = {
+  filter(f){ clFilter=f; renderChecklist(); },
+  cycle(id,gi,ii){ const e=DB.exercises.find(x=>x.id===id); const it=e.checklist[gi].items[ii];
+    const order=['', 'yes','no','na'];
+    let cur=order.indexOf(it.status); it.status=order[(cur+1)%order.length];
+    it.receivedAt = it.status==='yes'?Date.now():null;
+    Store.save(); renderChecklist(); },
+  remark(id,gi,ii,v){ const e=DB.exercises.find(x=>x.id===id); e.checklist[gi].items[ii].remark=v; Store.save(); },
+  setAll(id,st){ const e=DB.exercises.find(x=>x.id===id);
+    e.checklist.forEach(g=>g.items.forEach(it=>{it.status=st;it.receivedAt=st==='yes'?Date.now():null;}));
+    Store.save(); renderChecklist(); toast('Đã cập nhật tất cả','ok'); },
+  exportCSV(id){ const e=DB.exercises.find(x=>x.id===id);
+    let rows=[['Stage','PIC','Form','Status','ReceivedAt','Remark']];
+    e.checklist.forEach(g=>g.items.forEach(it=>rows.push([g.stage,g.pic,it.form,
+      it.status==='yes'?'Co san':it.status==='no'?'Khong co':it.status==='na'?'N/A':'Chua',
+      it.receivedAt?fmtDate(it.receivedAt):'', it.remark])));
+    downloadCSV(rows,'checklist_'+(e.batch||'batch')+'.csv'); }
+};
+
+/* ---------------------------- CHI TIẾT TRUY XUẤT ------------------------- */
+// Tổng input/output + gap của 1 section io
+function sectionTotals(rows){
+  let inS=0,outS=0; rows.forEach(r=>{inS+=(+r.inQty||0);outS+=(+r.outQty||0);});
+  return {inS,outS,gap:inS-outS,pct: inS>0?(inS-outS)/inS*100:0};
+}
+function renderTrace(){
+  const ex=currentEx(); const wrap=$('#tab-trace');
+  if(!ex){ wrap.innerHTML=`<div class="page-h"><h2>Chi tiết truy xuất</h2></div>
+    ${emptyBox('Chưa chọn đợt truy xuất','Tạo/chọn đợt ở tab “Đợt truy xuất”.')}`; return; }
+  const order=TRACE_ORDER[ex.dir]||TRACE_ORDER.backward;
+  wrap.innerHTML=`
+    <div class="page-h"><h2>Chi tiết truy xuất — ${ex.dir==='forward'?'Forward (xuôi)':'Backward (ngược)'}</h2>
+      <span class="desc">Nhập dữ liệu từng công đoạn (PO, Batch, SSCC, ngày, số lượng...) theo mẫu QA.F.029/030. Thứ tự công đoạn tự đảo theo chiều.</span></div>
+
+    <div class="card pad" style="margin-bottom:14px">
+      <h3>Người tham gia & Lý do</h3><hr class="hr">
+      <label class="fld"><span class="lb">Lý do truy xuất</span>
+        <input class="in" value="${esc(ex.trace.reason)}" oninput="Tr.reason('${ex.id}',this.value)" placeholder="VD: Mô phỏng SP nhiễm Pesticide / Organic Audit..."></label>
+      <div class="grid g2">
+        ${ex.trace.participants.map((p,i)=>`<div class="row" style="gap:6px">
+          <span class="muted" style="width:18px">${i+1}</span>
+          <input class="in" style="padding:6px 8px" placeholder="Tên" value="${esc(p.name)}" oninput="Tr.part('${ex.id}',${i},'name',this.value)">
+          <input class="in" style="padding:6px 8px;max-width:120px" placeholder="Bộ phận" value="${esc(p.dept)}" oninput="Tr.part('${ex.id}',${i},'dept',this.value)">
+        </div>`).join('')}
+      </div>
+    </div>
+
+    ${order.map((sec,idx)=>traceSection(ex,sec,idx+1)).join('')}
+
+    <div class="row" style="margin-top:14px">
+      <button class="btn pri" onclick="Nav.go('report')">▤ Xem báo cáo tổng hợp</button>
+      <button class="btn" onclick="Nav.go('mass')">⚖ Mass balance tổng</button>
+    </div>`;
+}
+function traceSection(ex,sec,no){
+  const spec=TRACE_SPEC[sec]; const rows=ex.trace[sec]||[];
+  const hasGap=spec.kind==='io';
+  // Header 2 tầng cho io: nhóm INPUT / OUTPUT
+  let head='';
+  if(hasGap){
+    const inCols=spec.cols.filter(c=>c.t==='in'), outCols=spec.cols.filter(c=>c.t==='out'), other=spec.cols.filter(c=>!c.t);
+    head=`<tr>
+      <th rowspan="2" style="width:40px">#</th>
+      ${other.filter(c=>c.k==='po').map(c=>`<th rowspan="2">${c.l}</th>`).join('')}
+      <th colspan="${inCols.length}" style="text-align:center;background:var(--brand-soft)">INPUT</th>
+      <th colspan="${outCols.length}" style="text-align:center;background:var(--ok-soft)">OUTPUT</th>
+      <th rowspan="2">Gap</th>
+      ${other.filter(c=>c.k!=='po').map(c=>`<th rowspan="2">${c.l}</th>`).join('')}
+      <th rowspan="2" style="width:34px"></th></tr>
+      <tr>${inCols.map(c=>`<th>${c.l}</th>`).join('')}${outCols.map(c=>`<th>${c.l}</th>`).join('')}</tr>`;
+  }else{
+    head=`<tr><th style="width:40px">#</th>${spec.cols.map(c=>`<th>${c.l}</th>`).join('')}<th style="width:34px"></th></tr>`;
+  }
+  const body=rows.map((r,i)=>{
+    let cells='';
+    if(hasGap){
+      const po=spec.cols.find(c=>c.k==='po');
+      const inCols=spec.cols.filter(c=>c.t==='in'), outCols=spec.cols.filter(c=>c.t==='out'), other=spec.cols.filter(c=>!c.t&&c.k!=='po');
+      const gap=(+r.inQty||0)-(+r.outQty||0);
+      cells=`<td>${cellInput(ex.id,sec,i,po)}</td>`
+        + inCols.map(c=>`<td>${cellInput(ex.id,sec,i,c)}</td>`).join('')
+        + outCols.map(c=>`<td>${cellInput(ex.id,sec,i,c)}</td>`).join('')
+        + `<td><b style="color:${Math.abs(gap)<0.0001?'var(--ok)':'var(--warn)'}">${fmtNum(gap)}</b></td>`
+        + other.map(c=>`<td>${cellInput(ex.id,sec,i,c)}</td>`).join('');
+    }else{
+      cells=spec.cols.map(c=>`<td>${cellInput(ex.id,sec,i,c)}</td>`).join('');
+    }
+    return `<tr><td>${i+1}</td>${cells}<td><button class="btn sm danger" style="padding:3px 7px" onclick="Tr.del('${ex.id}','${sec}',${i})">✕</button></td></tr>`;
+  }).join('');
+  let foot='';
+  if(hasGap){ const t=sectionTotals(rows);
+    foot=`<tr class="stage-row"><td colspan="99">Total input: <b>${fmtNum(t.inS)}</b> · Total output: <b>${fmtNum(t.outS)}</b> · Gap: <b>${fmtNum(t.gap)}</b> (${t.pct.toFixed(3)}%)</td></tr>`; }
+  return `<div class="card pad" style="margin-bottom:14px">
+    <div class="row" style="justify-content:space-between">
+      <h3>${no}. ${esc(spec.title)}</h3>
+      <button class="btn sm" onclick="Tr.add('${ex.id}','${sec}')">+ Dòng</button></div><hr class="hr">
+    <div style="overflow:auto">
+      <table class="tbl" style="min-width:${hasGap?'1000px':'900px'}">
+        <thead>${head}</thead>
+        <tbody>${body||`<tr><td colspan="99" class="muted">Chưa có dòng nào — bấm “+ Dòng”.</td></tr>`}</tbody>
+        ${foot?`<tfoot>${foot}</tfoot>`:''}
+      </table>
+    </div></div>`;
+}
+function cellInput(id,sec,i,col){
+  const ex=DB.exercises.find(x=>x.id===id); const v=ex.trace[sec][i][col.k]??'';
+  return `<input class="in" style="padding:4px 6px;min-width:${col.w||90}px" ${col.num?'type="number" step="any"':''}
+    value="${esc(v)}" oninput="Tr.cell('${id}','${sec}',${i},'${col.k}',this.value)" ${col.num?`onchange="renderTrace()"`:''}>`;
+}
+const Tr = {
+  reason(id,v){ const e=DB.exercises.find(x=>x.id===id); e.trace.reason=v; Store.save(); },
+  part(id,i,k,v){ const e=DB.exercises.find(x=>x.id===id); e.trace.participants[i][k]=v; Store.save(); },
+  add(id,sec){ const e=DB.exercises.find(x=>x.id===id); e.trace[sec].push(newTraceRow(sec)); Store.save(); renderTrace(); },
+  del(id,sec,i){ const e=DB.exercises.find(x=>x.id===id); e.trace[sec].splice(i,1); Store.save(); renderTrace(); },
+  cell(id,sec,i,k,v){ const e=DB.exercises.find(x=>x.id===id); e.trace[sec][i][k]=v; Store.save(); }
+  // Gap & totals cập nhật khi rời ô số lượng (onchange -> renderTrace) để không mất focus
+};
+
+/* ---------------------------- MASS BALANCE (logic ILD) ------------------- */
+const fmtPct=n=>(isFinite(n)?(n*100).toFixed(2):'0.00')+'%';
+// Cột nhập cho 1 dòng công đoạn
+const MASS_COLS=[
+  {k:'stage',l:'Quá trình',w:120},{k:'batch',l:'Batch lot',w:100},{k:'nsx',l:'NSX',w:90},{k:'po',l:'PO',w:90},
+  {k:'input',l:'INPUT (kg)',w:100,num:true},{k:'downgrade',l:'Downgrade (kg)',w:100,num:true},
+  {k:'loss',l:'Thất thoát (kg)',w:100,num:true},{k:'sampling',l:'Lấy mẫu (kg)',w:100,num:true},
+  {k:'instock',l:'In stock (kg)',w:100,num:true},{k:'actualOut',l:'Output thực tế (kg)',w:110,num:true},
+  {k:'record',l:'Record',w:90},{k:'remark',l:'Remark',w:130}
+];
+function renderMass(){
+  const ex=currentEx(); const wrap=$('#tab-mass');
+  if(!ex){ wrap.innerHTML=`<div class="page-h"><h2>Mass Balance</h2></div>
+    ${emptyBox('Chưa chọn đợt truy xuất','Tạo/chọn đợt ở tab “Đợt truy xuất”.')}`; return; }
+  const m=ex.mass; const mc=massCalc(ex);
+  const devOk=mc.hasData && mc.unknownDev<=mc.limit;
+  wrap.innerHTML=`
+    <div class="page-h"><h2>Cân bằng khối lượng (Mass Balance — logic ILD)</h2>
+      <span class="desc">2 nhóm quy về cùng basis (GC → Solid). Output lý thuyết = INPUT − Downgrade − Thất thoát − Lấy mẫu − In stock. Tỉ lệ thu hồi = Thực tế/Lý thuyết. Unknown deviation mục tiêu &lt; ${m.unknownLimit}%.</span></div>
+
+    <div class="grid g4" style="margin-bottom:12px">
+      <div class="card kpi"><div class="n">${fmtPct(mc.s1.recovery)}</div><div class="l">N1 · Thu hồi Stage 1 (GC)</div></div>
+      <div class="card kpi"><div class="n">${fmtPct(mc.s2.recovery)}</div><div class="l">N2 · Thu hồi Stage 2 (Solid)</div></div>
+      <div class="card kpi"><div class="n">${fmtPct(mc.overall)}</div><div class="l">Hệ số chuyển đổi tổng (N1×N9×N2)</div></div>
+      <div class="card kpi"><div class="n" style="color:${devOk?'var(--ok)':'var(--bad)'}">${mc.unknownDev.toFixed(2)}%</div>
+        <div class="l">Unknown deviation ${!mc.hasData?'(chưa đủ data)':devOk?'✓ đạt':'✗ vượt'}</div></div>
+    </div>
+
+    <div class="card pad" style="margin-bottom:12px">
+      <h3>Hệ số quy đổi & tham số</h3><hr class="hr">
+      <div class="grid g4">
+        <label class="fld"><span class="lb">Hệ số rang (Roast yield)</span>
+          <input class="in" type="number" step="0.0001" value="${m.factors.roastYield}" onchange="Mb.factor('${ex.id}','factors.roastYield',this.value)"></label>
+        <label class="fld"><span class="lb">Hệ số Solid của FG</span>
+          <input class="in" type="number" step="0.0001" value="${m.factors.fgSolid}" onchange="Mb.factor('${ex.id}','factors.fgSolid',this.value)"></label>
+        <label class="fld"><span class="lb">Tổng Solid từ Extraction thực tế (kg)</span>
+          <input class="in" type="number" step="any" value="${esc(m.solidFromExtraction)}" onchange="Mb.factor('${ex.id}','solidFromExtraction',this.value)"></label>
+        <label class="fld"><span class="lb">Ngưỡng Unknown deviation (%)</span>
+          <input class="in" type="number" step="0.1" value="${m.unknownLimit}" onchange="Mb.factor('${ex.id}','unknownLimit',this.value)"></label>
+      </div>
+      <div class="muted" style="font-size:12px">Sau rang, các đại lượng Stage 1 (Roaster/Grinder) được chia cho hệ số rang để quy về GC. FGs ở Stage 2 nhân hệ số Solid.</div>
+    </div>
+
+    ${massStageTable(ex,'stage1','STAGE 1 — Quy về GC (Green Coffee)', mc.s1, 'GC')}
+    <div class="card pad" style="margin:12px 0;background:var(--brand-soft);border:0">
+      <div class="row" style="justify-content:space-between;flex-wrap:wrap">
+        <b>CONVERT GC → SOLID</b>
+        <div class="muted" style="font-size:12.5px">N9 = Tổng Solid Extraction (${fmtNum(mc.M9)}) ÷ Output thực tế Stage 1 quy GC (${fmtNum(mc.s1.actual)}) = <b>${fmtPct(mc.N9)}</b></div>
+      </div>
+    </div>
+    ${massStageTable(ex,'stage2','STAGE 2 — Quy về Total Solid', mc.s2, 'Solid')}
+
+    <div class="card pad" style="margin-top:12px;background:${devOk?'var(--ok-soft)':'var(--bad-soft)'};border:0">
+      <div class="grid g2">
+        <div><b>Hệ số chuyển đổi tổng (GC → FG)</b><div style="font-size:22px;font-weight:800">${fmtPct(mc.overall)}</div>
+          <div class="muted" style="font-size:11.5px">= N1 × N9 × N2 · Range tham khảo 25–53%</div></div>
+        <div><b>Unknown deviation</b><div style="font-size:22px;font-weight:800;color:${devOk?'var(--ok)':'var(--bad)'}">${mc.unknownDev.toFixed(2)}%</div>
+          <div class="muted" style="font-size:11.5px">= |1 − N1 × N2| · Mục tiêu &lt; ${m.limit||m.unknownLimit}% ${!mc.hasData?'· cần nhập INPUT Stage 1 & Output Grinder':(devOk?'· ✓ đạt':'· ✗ vượt ngưỡng, rà soát hồ sơ')}</div></div>
+      </div>
+    </div>
+
+    <label class="fld" style="margin-top:12px"><span class="lb">Ghi chú mass balance</span>
+      <textarea class="in" oninput="Mb.note('${ex.id}',this.value)">${esc(m.note||'')}</textarea></label>`;
+}
+// Bảng nhập 1 nhóm stage + dòng SUMMARY tính sẵn
+function massStageTable(ex,stage,title,s,basis){
+  const rows=ex.mass[stage];
+  const body=rows.map((r,i)=>{
+    const badge = r.roasted?'<span class="tag na" title="Sau rang: quy về GC bằng ÷ hệ số rang">÷RY</span>'
+      : r.isFG?'<span class="tag na" title="FGs: quy về Solid bằng × hệ số Solid">×FG</span>':'';
+    return `<tr>
+      <td>${i+1}</td>
+      ${MASS_COLS.map(c=>`<td>${c.k==='stage'
+        ? `<div class="row" style="gap:4px"><input class="in" style="padding:4px 6px;min-width:${c.w}px" value="${esc(r[c.k]||'')}" oninput="Mb.cell('${ex.id}','${stage}',${i},'${c.k}',this.value)">${badge}</div>`
+        : `<input class="in" style="padding:4px 6px;min-width:${c.w}px" ${c.num?'type="number" step="any"':''} value="${esc(r[c.k]||'')}" oninput="Mb.cell('${ex.id}','${stage}',${i},'${c.k}',this.value)" ${c.num?'onchange="renderMass()"':''}>`
+      }</td>`).join('')}
+      <td><button class="btn sm danger" style="padding:3px 7px" onclick="Mb.del('${ex.id}','${stage}',${i})">✕</button></td>
+    </tr>`;
+  }).join('');
+  // SUMMARY row (tính từ massCalc)
+  const sumRow=`<tr class="stage-row">
+    <td></td><td><b>SUMMARY (${basis})</b></td><td></td><td></td><td></td>
+    <td><b>${fmtNum(s.input)}</b></td><td>${fmtNum(s.dg)}</td><td>${fmtNum(s.loss)}</td><td>${fmtNum(s.samp)}</td><td>${fmtNum(s.stock)}</td>
+    <td><b>${fmtNum(s.actual)}</b></td><td colspan="2">Output lý thuyết: <b>${fmtNum(s.theo)}</b> · Thu hồi: <b>${fmtPct(s.recovery)}</b> · Gap: <b>${fmtPct(s.gap)}</b></td><td></td></tr>`;
+  return `<div class="card pad">
+    <div class="row" style="justify-content:space-between"><h3>${esc(title)}</h3>
+      <button class="btn sm" onclick="Mb.add('${ex.id}','${stage}')">+ Công đoạn</button></div><hr class="hr">
+    <div style="overflow:auto">
+      <table class="tbl" style="min-width:1250px">
+        <thead><tr><th style="width:36px">#</th>${MASS_COLS.map(c=>`<th>${c.l}</th>`).join('')}<th style="width:34px"></th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot>${sumRow}</tfoot>
+      </table>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">INPUT của nhóm lấy ở <b>dòng đầu</b>; Output thực tế lấy ở <b>dòng cuối</b> (${basis==='GC'?'Grinder':'FGs'}). Downgrade/Thất thoát/Lấy mẫu/In stock được cộng dồn theo hệ số quy đổi từng dòng.</div>
+  </div>`;
+}
+const Mb = {
+  cell(id,stage,i,k,v){ const e=DB.exercises.find(x=>x.id===id); e.mass[stage][i][k]=v; Store.save(); },
+  factor(id,path,v){ const e=DB.exercises.find(x=>x.id===id);
+    if(path.startsWith('factors.')) e.mass.factors[path.split('.')[1]]=+v||0;
+    else e.mass[path]= (path==='solidFromExtraction'||path==='reworkAddSolid'||path==='unknownLimit')?(+v||0):v;
+    Store.save(); renderMass(); },
+  note(id,v){ const e=DB.exercises.find(x=>x.id===id); e.mass.note=v; Store.save(); },
+  add(id,stage){ const e=DB.exercises.find(x=>x.id===id); e.mass[stage].push(mkStageRow('',stage==='stage1'?{roasted:false}:{isFG:false})); Store.save(); renderMass(); },
+  del(id,stage,i){ const e=DB.exercises.find(x=>x.id===id); e.mass[stage].splice(i,1); Store.save(); renderMass(); }
+};
+const fmtNum=n=>{ n=+n||0; return n.toLocaleString('vi-VN',{maximumFractionDigits:3}); };
+
+/* ---------------------------- BÁO CÁO (QA.F.029 / QA.F.030) --------------- */
+// Thời lượng truy xuất (hh:mm:ss)
+function reportDuration(ex){ if(ex.startAt&&ex.finishAt) return fmtDur(ex.finishAt-ex.startAt); return '—'; }
+// Bảng mass balance 1 stage cho báo cáo (read-only) + dòng SUMMARY tính sẵn
+function reportMassTable(ex,stage,title,s,basis){
+  const rows=ex.mass[stage]||[];
+  const cols=['stage','batch','nsx','po','input','downgrade','loss','sampling','instock','actualOut'];
+  const heads=['Quá trình','Batch','NSX','PO','INPUT','Downgrade','Thất thoát','Lấy mẫu','In stock','Output TT'];
+  const body=rows.map(r=>`<tr>${cols.map((k,ci)=>`<td>${ci>=4?fmtNum(r[k]):esc(r[k]||'')}</td>`).join('')}</tr>`).join('')
+    ||`<tr><td colspan="10" class="muted">Chưa nhập</td></tr>`;
+  return `<div style="font-weight:600;margin:8px 0 4px">${esc(title)}</div>
+    <div style="overflow:auto"><table class="tbl" style="min-width:900px">
+    <thead><tr>${heads.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr class="stage-row"><td><b>SUMMARY (${basis})</b></td><td></td><td></td><td></td>
+      <td><b>${fmtNum(s.input)}</b></td><td>${fmtNum(s.dg)}</td><td>${fmtNum(s.loss)}</td><td>${fmtNum(s.samp)}</td><td>${fmtNum(s.stock)}</td><td><b>${fmtNum(s.actual)}</b></td></tr>
+    <tr class="stage-row"><td colspan="10">Output lý thuyết: <b>${fmtNum(s.theo)}</b> · Tỉ lệ thu hồi: <b>${fmtPct(s.recovery)}</b> · Gap: <b>${fmtPct(s.gap)}</b></td></tr>
+    </tfoot></table></div>`;
+}
+// Render 1 section chi tiết truy xuất ở dạng bảng báo cáo (read-only)
+function reportTraceSection(ex,sec,no){
+  const spec=TRACE_SPEC[sec]; const rows=ex.trace[sec]||[];
+  if(spec.kind==='flat'){
+    const head=`<tr>${spec.cols.map(c=>`<th>${c.l}</th>`).join('')}</tr>`;
+    const body=rows.length?rows.map(r=>`<tr>${spec.cols.map(c=>`<td>${c.num?fmtNum(r[c.k]):esc(r[c.k]||'')}</td>`).join('')}</tr>`).join('')
+      :`<tr><td colspan="${spec.cols.length}" class="muted">Chưa nhập dữ liệu</td></tr>`;
+    return `<h4 style="margin:14px 0 6px">6.${no}. ${esc(spec.title)}</h4>
+      <div style="overflow:auto"><table class="tbl" style="min-width:800px"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }
+  // io section
+  const inCols=spec.cols.filter(c=>c.t==='in'), outCols=spec.cols.filter(c=>c.t==='out'), other=spec.cols.filter(c=>!c.t);
+  const po=other.find(c=>c.k==='po'); const rest=other.filter(c=>c.k!=='po');
+  const head=`<tr>
+      ${po?`<th rowspan="2">${po.l}</th>`:''}
+      <th colspan="${inCols.length}" style="text-align:center;background:var(--brand-soft)">INPUT</th>
+      <th colspan="${outCols.length}" style="text-align:center;background:var(--ok-soft)">OUTPUT</th>
+      <th rowspan="2">Gap</th>${rest.map(c=>`<th rowspan="2">${c.l}</th>`).join('')}</tr>
+    <tr>${inCols.map(c=>`<th>${c.l}</th>`).join('')}${outCols.map(c=>`<th>${c.l}</th>`).join('')}</tr>`;
+  const body=rows.length?rows.map(r=>{
+    const gap=(+r.inQty||0)-(+r.outQty||0);
+    return `<tr>${po?`<td>${esc(r.po||'')}</td>`:''}
+      ${inCols.map(c=>`<td>${c.num?fmtNum(r[c.k]):esc(r[c.k]||'')}</td>`).join('')}
+      ${outCols.map(c=>`<td>${c.num?fmtNum(r[c.k]):esc(r[c.k]||'')}</td>`).join('')}
+      <td>${fmtNum(gap)}</td>${rest.map(c=>`<td>${esc(r[c.k]||'')}</td>`).join('')}</tr>`;
+  }).join(''):`<tr><td colspan="99" class="muted">Chưa nhập dữ liệu</td></tr>`;
+  const t=sectionTotals(rows);
+  const foot=rows.length?`<tfoot><tr class="stage-row"><td colspan="99">Total input: <b>${fmtNum(t.inS)}</b> · Total output: <b>${fmtNum(t.outS)}</b> · Gap: <b>${fmtNum(t.gap)}</b> (${t.pct.toFixed(3)}%)</td></tr></tfoot>`:'';
+  return `<h4 style="margin:14px 0 6px">6.${no}. ${esc(spec.title)}</h4>
+    <div style="overflow:auto"><table class="tbl" style="min-width:950px"><thead>${head}</thead><tbody>${body}</tbody>${foot}</table></div>`;
+}
+function renderReport(){
+  const ex=currentEx();
+  const wrap=$('#tab-report');
+  if(!ex){ wrap.innerHTML=`<div class="page-h"><h2>Báo cáo truy xuất</h2></div>
+    ${emptyBox('Chưa chọn đợt truy xuất','Tạo/chọn đợt ở tab “Đợt truy xuất”.')}`; return; }
+  const ev=evalExercise(ex);
+  const order=TRACE_ORDER[ex.dir]||TRACE_ORDER.backward;
+  const isFwd=ex.dir==='forward';
+  const crit=(ok,t)=>`<div class="row"><span class="tag ${ok?'ok':'bad'}">${ok?'✓ ĐẠT':'✗ CHƯA'}</span> ${t}</div>`;
+  // Bảng người tham gia (2 cột 4 dòng)
+  const P=ex.trace.participants;
+  let partRows='';
+  for(let i=0;i<4;i++){ const a=P[i]||{},b=P[i+4]||{};
+    partRows+=`<tr><td>${i+1}</td><td>${esc(a.name||'')}</td><td>${esc(a.dept||'')}</td>
+      <td>${i+5}</td><td>${esc(b.name||'')}</td><td>${esc(b.dept||'')}</td></tr>`; }
+
+  wrap.innerHTML=`
+    <div class="page-h noprint"><h2>Báo cáo truy xuất (${isFwd?'QA.F.029 Forward':'QA.F.030 Backward'})</h2>
+      <span class="spacer"></span>
+      <button class="btn pri" onclick="Xlsx.report('${ex.id}')">⬇ Xuất Excel (.xlsx)</button>
+      <button class="btn" onclick="window.print()">🖨 In / PDF</button>
+      <button class="btn sm" onclick="Rep.csv('${ex.id}')">CSV checklist</button>
+    </div>
+
+    <div class="card pad" id="reportDoc">
+      <div style="text-align:center">
+        <div class="muted" style="font-size:12px">ILD COFFEE VIETNAM CO., LTD</div>
+        <h2 style="color:var(--brand-2)">${isFwd?'BÁO CÁO TRUY XUẤT XUÔI':'BÁO CÁO TRUY XUẤT NGƯỢC'}</h2>
+        <div class="muted">${isFwd?'FORWARD TRACEABILITY REPORT':'BACKWARD TRACEABILITY REPORT'} · ${isFwd?'QA.F.029':'QA.F.030'}
+          ${ex.status==='closed'?` · <span class="tag ${ev.pass?'ok':'bad'}">${ev.pass?'ĐẠT / PASS':'KHÔNG ĐẠT / FAIL'}</span>`:''}</div>
+      </div>
+      <hr class="hr">
+
+      <h3>1. Thời gian truy xuất / Traceability time</h3>
+      <table class="tbl"><tbody>
+        <tr><th style="width:260px">Ngày / Date</th><td>${fmtDay(ex.startAt||ex.createdAt)}</td></tr>
+        <tr><th>Thời gian bắt đầu / Start time</th><td>${ex.startAt?new Date(ex.startAt).toLocaleTimeString('vi-VN'):'—'}</td></tr>
+        <tr><th>Thời gian kết thúc / End time</th><td>${ex.finishAt?new Date(ex.finishAt).toLocaleTimeString('vi-VN'):'—'}</td></tr>
+        <tr><th>Khoảng thời gian / Duration (hours)</th><td>${reportDuration(ex)}</td></tr>
+      </tbody></table>
+
+      <h3 style="margin-top:16px">2. Người tham gia / Participants</h3>
+      <table class="tbl"><thead><tr><th>No.</th><th>Tên / Name</th><th>Bộ phận</th><th>No.</th><th>Tên / Name</th><th>Bộ phận</th></tr></thead>
+        <tbody>${partRows}</tbody></table>
+
+      <div class="grid g2" style="margin-top:16px">
+        <div><h3>3. Loại truy xuất / Type</h3><p>${isFwd?'Xuôi / Forward':'Ngược / Backward'}</p></div>
+        <div><h3>4. Lý do / Reason</h3><p>${esc(ex.trace.reason||ex.purpose||'—')}${ex.scenario?' · '+esc(ex.scenario):''}</p></div>
+      </div>
+
+      <h3 style="margin-top:16px">5. Thông tin truy xuất / Traceability information</h3>
+      <table class="tbl"><thead><tr><th>Material No.</th><th>Material</th><th>Batch No.</th><th>Receipt / Prod date</th></tr></thead>
+        <tbody><tr><td>${esc(ex.matNo||'—')}</td><td>${esc(ex.material||'—')}</td><td>${esc(ex.batch||'—')}</td><td>${fmtDay(ex.startAt||ex.createdAt)}</td></tr></tbody></table>
+
+      <h3 style="margin-top:16px">6. Kết quả / Result</h3>
+      ${order.map((sec,i)=>reportTraceSection(ex,sec,i+1)).join('')}
+
+      <h4 style="margin:14px 0 6px">6.${order.length+1}. Mass Balance (logic ILD — quy về basis chung)</h4>
+      ${reportMassTable(ex,'stage1','STAGE 1 — Quy về GC',ev.mc.s1,'GC')}
+      <div class="muted" style="font-size:12px;margin:4px 0"><b>Convert GC → Solid:</b> N9 = ${fmtNum(ev.mc.M9)} ÷ ${fmtNum(ev.mc.s1.actual)} = <b>${fmtPct(ev.mc.N9)}</b></div>
+      ${reportMassTable(ex,'stage2','STAGE 2 — Quy về Total Solid',ev.mc.s2,'Solid')}
+      <table class="tbl" style="margin-top:8px"><tbody>
+        <tr><th style="width:280px">Hệ số chuyển đổi tổng (N1×N9×N2)</th><td><b>${fmtPct(ev.mc.overall)}</b> <span class="muted">(range 25–53%)</span></td></tr>
+        <tr><th>Unknown deviation |1 − N1×N2|</th><td><b style="color:${ev.massOk?'var(--ok)':'var(--bad)'}">${ev.mc.unknownDev.toFixed(2)}%</b> <span class="muted">(mục tiêu &lt; ${ev.mc.limit}%)</span></td></tr>
+      </tbody></table>
+
+      <h3 style="margin-top:16px">7. Kết luận / Conclusion</h3>
+      <div class="grid g2" style="margin:8px 0">
+        ${crit(ev.onTime,'Completing within required time (≤ '+DB.settings.maxHours+'h) — '+ev.ts.text)}
+        ${crit(ev.complete,'Adequate required data and records ('+ev.cs.done+'/'+(ev.cs.total-ev.cs.na)+')')}
+        ${crit(ev.cs.done>0,'Strongly & clearly links between stages')}
+        ${crit(ev.massOk,'Correct quantity / mass balance (unknown dev '+ev.mc.unknownDev.toFixed(2)+'%)')}
+      </div>
+      <p><b>Kết luận:</b> ${esc(ex.conclusion||(ex.status==='closed'?(ev.pass?'Đạt':'Không đạt'):'—'))}</p>
+
+      <h3 style="margin-top:8px">8. Điểm cần cải thiện / Improvement points</h3>
+      <p>${esc(ex.capa||'N.A')}</p>
+
+      <hr class="hr">
+      <div class="row" style="justify-content:space-between;margin-top:26px">
+        <div style="text-align:center"><b>Prepared by</b><br><br><br>_____________<br><span class="muted">Date:</span></div>
+        <div style="text-align:center"><b>Reviewed by</b><br><br><br>_____________<br><span class="muted">Date:</span></div>
+        <div style="text-align:center"><b>Approved by</b><br><br><br>_____________<br><span class="muted">Date:</span></div>
+      </div>
+      <div class="muted" style="font-size:11px;margin-top:14px">Hồ sơ truy xuất lưu tối thiểu ${CFG.RETAIN_YEARS} năm. Tham chiếu: FSSC 22000 v5.1 · BRC issue 9 · IFS Food v7.</div>
+    </div>`;
+}
+const Rep={ csv(id){ Cl.exportCSV(id); } };
+
+/* ============================================================================
+   [XLSX] Xuất Excel .xlsx thuần JS — ZIP (store) + OOXML, không thư viện ngoài.
+   Tạo báo cáo theo bố cục QA.F.029 (Forward) / QA.F.030 (Backward).
+   ==========================================================================*/
+const Xlsx = (function(){
+  const enc=new TextEncoder();
+  // ---- CRC32 ----
+  const CRC=(()=>{let t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}return t;})();
+  function crc32(b){let c=0^-1;for(let i=0;i<b.length;i++)c=(c>>>8)^CRC[(c^b[i])&255];return (c^-1)>>>0;}
+  // ---- ZIP store ----
+  function zip(files){
+    const u16=n=>[n&255,(n>>8)&255], u32=n=>[n&255,(n>>8)&255,(n>>16)&255,(n>>24)&255];
+    let local=[], central=[], offset=0;
+    files.forEach(f=>{
+      const name=enc.encode(f.name), data=f.data, crc=crc32(data);
+      const lh=[].concat(u32(0x04034b50),u16(20),u16(0),u16(0),u16(0),u16(0),u32(crc),u32(data.length),u32(data.length),u16(name.length),u16(0));
+      local.push(new Uint8Array(lh),name,data);
+      const ch=[].concat(u32(0x02014b50),u16(20),u16(20),u16(0),u16(0),u16(0),u16(0),u32(crc),u32(data.length),u32(data.length),u16(name.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(offset));
+      central.push(new Uint8Array(ch),name);
+      offset+=lh.length+name.length+data.length;
+    });
+    let cenSize=central.reduce((a,x)=>a+x.length,0);
+    const end=new Uint8Array([].concat(u32(0x06054b50),u16(0),u16(0),u16(files.length),u16(files.length),u32(cenSize),u32(offset),u16(0)));
+    const all=[...local,...central,end]; let total=all.reduce((a,x)=>a+x.length,0);
+    let out=new Uint8Array(total),p=0; all.forEach(x=>{out.set(x,p);p+=x.length;}); return out;
+  }
+  const xmlEsc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const colLetter=n=>{let s='';n++;while(n>0){let m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26;}return s;};
+  // ---- Builder: matrix rows of cells {v, s, num} ----
+  function Sheet(){ this.rows=[]; this.merges=[]; this.cols=[]; }
+  Sheet.prototype.add=function(cells){ this.rows.push(cells||[]); return this.rows.length; };
+  Sheet.prototype.merge=function(r0,c0,r1,c1){ this.merges.push(colLetter(c0)+(r0)+':'+colLetter(c1)+(r1)); };
+  function cell(v,s,num){ return {v,s:s||0,num:!!num}; }
+  function sheetXML(sh){
+    let rowsXml='';
+    sh.rows.forEach((cells,ri)=>{
+      const r=ri+1; let cs='';
+      cells.forEach((c,ci)=>{
+        if(c==null){return;}
+        const ref=colLetter(ci)+r;
+        if(c.num && c.v!=='' && c.v!=null && !isNaN(+c.v))
+          cs+=`<c r="${ref}" s="${c.s}"><v>${+c.v}</v></c>`;
+        else
+          cs+=`<c r="${ref}" s="${c.s}" t="inlineStr"><is><t xml:space="preserve">${xmlEsc(c.v)}</t></is></c>`;
+      });
+      rowsXml+=`<row r="${r}">${cs}</row>`;
+    });
+    const colsXml = sh.cols.length? `<cols>${sh.cols.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols>`:'';
+    const mg = sh.merges.length? `<mergeCells count="${sh.merges.length}">${sh.merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>`:'';
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews>${colsXml}<sheetData>${rowsXml}</sheetData>${mg}</worksheet>`;
+  }
+  const STYLES=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="4">
+<font><sz val="11"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><name val="Calibri"/></font>
+<font><b/><sz val="15"/><color rgb="FF0A4A8A"/><name val="Calibri"/></font>
+<font><b/><sz val="11"/><color rgb="FF0A4A8A"/><name val="Calibri"/></font>
+</fonts>
+<fills count="4">
+<fill><patternFill patternType="none"/></fill>
+<fill><patternFill patternType="gray125"/></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFD9DFE8"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFE5F0FB"/></patternFill></fill>
+</fills>
+<borders count="2">
+<border><left/><right/><top/><bottom/><diagonal/></border>
+<border><left style="thin"><color rgb="FFBFC7D2"/></left><right style="thin"><color rgb="FFBFC7D2"/></right><top style="thin"><color rgb="FFBFC7D2"/></top><bottom style="thin"><color rgb="FFBFC7D2"/></bottom><diagonal/></border>
+</borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="7">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" wrapText="1"/></xf>
+<xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+  // Style index constants
+  const S={def:0,bold:1,title:2,header:3,section:4,cell:5,kbold:6};
+  // ---- Build report sheet from exercise ----
+  const NCOL=12;
+  function build(ex){
+    const sh=new Sheet();
+    sh.cols=[14,20,14,14,14,12,12,12,12,14,12,14];
+    const ev=evalExercise(ex), isFwd=ex.dir==='forward';
+    const order=TRACE_ORDER[ex.dir]||TRACE_ORDER.backward;
+    const blank=()=>sh.add([]);
+    const titleRow=(t,st)=>{ const r=sh.add([cell(t,st||S.section)]); sh.merge(r,0,r,NCOL-1); return r; };
+    // Header
+    let r=sh.add([cell('ILD COFFEE VIETNAM CO., LTD',S.bold)]); sh.merge(r,0,r,NCOL-1);
+    r=sh.add([cell(isFwd?'BÁO CÁO TRUY XUẤT XUÔI / FORWARD TRACEABILITY REPORT':'BÁO CÁO TRUY XUẤT NGƯỢC / BACKWARD TRACEABILITY REPORT',S.title)]); sh.merge(r,0,r,NCOL-1);
+    r=sh.add([cell((isFwd?'QA.F.029':'QA.F.030')+(ex.status==='closed'?(ev.pass?'  —  ĐẠT / PASS':'  —  KHÔNG ĐẠT / FAIL'):''),S.bold)]); sh.merge(r,0,r,NCOL-1);
+    blank();
+    // 1. Time
+    titleRow('1. Thời gian truy xuất / Traceability time');
+    const kv=(k,v)=>{const rr=sh.add([cell(k,S.kbold),cell(v)]); sh.merge(rr,1,rr,4);};
+    kv('Ngày / Date', fmtDay(ex.startAt||ex.createdAt));
+    kv('Thời gian bắt đầu / Start time', ex.startAt?new Date(ex.startAt).toLocaleTimeString('vi-VN'):'');
+    kv('Thời gian kết thúc / End time', ex.finishAt?new Date(ex.finishAt).toLocaleTimeString('vi-VN'):'');
+    kv('Khoảng thời gian / Duration (h)', reportDuration(ex));
+    blank();
+    // 2. Participants
+    titleRow('2. Người tham gia / Participants');
+    sh.add([cell('No.',S.header),cell('Tên / Name',S.header),cell('Bộ phận',S.header),cell('No.',S.header),cell('Tên / Name',S.header),cell('Bộ phận',S.header)]);
+    const P=ex.trace.participants;
+    for(let i=0;i<4;i++){const a=P[i]||{},b=P[i+4]||{};
+      sh.add([cell(i+1,S.cell),cell(a.name||'',S.cell),cell(a.dept||'',S.cell),cell(i+5,S.cell),cell(b.name||'',S.cell),cell(b.dept||'',S.cell)]);}
+    blank();
+    // 3 & 4
+    let rr=sh.add([cell('3. Loại truy xuất / Type',S.kbold),cell(isFwd?'Xuôi / Forward':'Ngược / Backward')]); sh.merge(rr,1,rr,4);
+    rr=sh.add([cell('4. Lý do / Reason',S.kbold),cell((ex.trace.reason||ex.purpose||'')+(ex.scenario?' · '+ex.scenario:''))]); sh.merge(rr,1,rr,NCOL-1);
+    blank();
+    // 5. Info
+    titleRow('5. Thông tin truy xuất / Traceability information');
+    sh.add([cell('Material No.',S.header),cell('Material',S.header),cell('Batch No.',S.header),cell('Receipt / Prod date',S.header)]);
+    sh.add([cell(ex.matNo||'',S.cell),cell(ex.material||'',S.cell),cell(ex.batch||'',S.cell),cell(fmtDay(ex.startAt||ex.createdAt),S.cell)]);
+    blank();
+    // 6. Result
+    titleRow('6. Kết quả / Result');
+    order.forEach((sec,i)=> buildSection(sh,ex,sec,i+1));
+    // 6.x Mass balance (logic ILD)
+    titleRow('6.'+(order.length+1)+'. Mass Balance (logic ILD)',S.section);
+    buildMassStage(sh,ex,'stage1','STAGE 1 — Quy về GC',ev.mc.s1,'GC');
+    let mr=sh.add([cell('CONVERT GC → SOLID · N9 = '+fmtNum(ev.mc.M9)+' ÷ '+fmtNum(ev.mc.s1.actual)+' = '+fmtPct(ev.mc.N9),S.bold)]); sh.merge(mr,0,mr,NCOL-1);
+    buildMassStage(sh,ex,'stage2','STAGE 2 — Quy về Total Solid',ev.mc.s2,'Solid');
+    sh.add([cell('Hệ số chuyển đổi tổng (N1×N9×N2)',S.kbold),cell(fmtPct(ev.mc.overall)+'  (range 25–53%)')]);
+    sh.add([cell('Unknown deviation |1 − N1×N2|',S.kbold),cell(ev.mc.unknownDev.toFixed(2)+'%  (mục tiêu < '+ev.mc.limit+'%) '+(ev.massOk?'ĐẠT':'—'))]);
+    blank();
+    // 7. Conclusion
+    titleRow('7. Kết luận / Conclusion');
+    [[ev.onTime,'Completing within required time (≤'+DB.settings.maxHours+'h) — '+ev.ts.text],
+     [ev.complete,'Adequate required data and records ('+ev.cs.done+'/'+(ev.cs.total-ev.cs.na)+')'],
+     [ev.cs.done>0,'Strongly & clearly links between stages'],
+     [ev.massOk,'Correct quantity / mass balance (unknown dev '+ev.mc.unknownDev.toFixed(2)+'%)']].forEach(x=>{
+       const row=sh.add([cell((x[0]?'[ĐẠT] ':'[CHƯA] ')+x[1])]); sh.merge(row,0,row,NCOL-1);});
+    rr=sh.add([cell('Kết luận:',S.kbold),cell(ex.conclusion||(ex.status==='closed'?(ev.pass?'Đạt':'Không đạt'):''))]); sh.merge(rr,1,rr,NCOL-1);
+    blank();
+    // 8. Improvement
+    titleRow('8. Điểm cần cải thiện / Improvement points');
+    rr=sh.add([cell(ex.capa||'N.A')]); sh.merge(rr,0,rr,NCOL-1);
+    blank();
+    // Signatures
+    sh.add([cell('Prepared by',S.bold),null,cell('Reviewed by',S.bold),null,cell('Approved by',S.bold)]);
+    sh.add([cell('Date:'),null,cell('Date:'),null,cell('Date:')]);
+    return sheetXML(sh);
+  }
+  function buildSection(sh,ex,sec,no){
+    const spec=TRACE_SPEC[sec], rows=ex.trace[sec]||[];
+    const row=sh.add([cell('6.'+no+'. '+spec.title,S.section)]); sh.merge(row,0,row,NCOL-1);
+    if(spec.kind==='flat'){
+      sh.add(spec.cols.map(c=>cell(c.l,S.header)));
+      if(!rows.length) sh.add([cell('(chưa nhập)',S.cell)]);
+      rows.forEach(rw=> sh.add(spec.cols.map(c=>cell(rw[c.k]||'',S.cell,c.num))));
+    }else{
+      const inC=spec.cols.filter(c=>c.t==='in'),outC=spec.cols.filter(c=>c.t==='out'),other=spec.cols.filter(c=>!c.t);
+      const po=other.find(c=>c.k==='po'),rest=other.filter(c=>c.k!=='po');
+      const head=[]; if(po)head.push(cell('PO',S.header));
+      inC.forEach(c=>head.push(cell('IN: '+c.l,S.header))); outC.forEach(c=>head.push(cell('OUT: '+c.l,S.header)));
+      head.push(cell('Gap',S.header)); rest.forEach(c=>head.push(cell(c.l,S.header)));
+      sh.add(head);
+      if(!rows.length) sh.add([cell('(chưa nhập)',S.cell)]);
+      rows.forEach(rw=>{ const line=[]; if(po)line.push(cell(rw.po||'',S.cell));
+        inC.forEach(c=>line.push(cell(rw[c.k]||'',S.cell,c.num)));
+        outC.forEach(c=>line.push(cell(rw[c.k]||'',S.cell,c.num)));
+        line.push(cell((+rw.inQty||0)-(+rw.outQty||0),S.cell,true));
+        rest.forEach(c=>line.push(cell(rw[c.k]||'',S.cell)));
+        sh.add(line); });
+      const t=sectionTotals(rows);
+      sh.add([cell('Total input: '+fmtNum(t.inS)+' · Total output: '+fmtNum(t.outS)+' · Gap: '+fmtNum(t.gap)+' ('+t.pct.toFixed(3)+'%)',S.bold)]);
+    }
+  }
+  // ---- Mass balance 1 stage (logic ILD) ra Excel ----
+  function buildMassStage(sh,ex,stage,title,s,basis){
+    const rows=ex.mass[stage]||[];
+    const row=sh.add([cell(title,S.section)]); sh.merge(row,0,row,NCOL-1);
+    const heads=['Quá trình','Batch','NSX','PO','INPUT','Downgrade','Thất thoát','Lấy mẫu','In stock','Output TT'];
+    sh.add(heads.map(h=>cell(h,S.header)));
+    const cols=['stage','batch','nsx','po','input','downgrade','loss','sampling','instock','actualOut'];
+    if(!rows.length) sh.add([cell('(chưa nhập)',S.cell)]);
+    rows.forEach(r=> sh.add(cols.map((k,ci)=>cell(r[k]||'',S.cell,ci>=4))));
+    sh.add([cell('SUMMARY ('+basis+')',S.header),cell('',S.header),cell('',S.header),cell('',S.header),
+      cell(s.input,S.header,true),cell(s.dg,S.header,true),cell(s.loss,S.header,true),cell(s.samp,S.header,true),cell(s.stock,S.header,true),cell(s.actual,S.header,true)]);
+    const r2=sh.add([cell('Output lý thuyết: '+fmtNum(s.theo)+' · Tỉ lệ thu hồi: '+fmtPct(s.recovery)+' · Gap: '+fmtPct(s.gap),S.bold)]); sh.merge(r2,0,r2,NCOL-1);
+  }
+  // ---- Đóng gói workbook -> Uint8Array (.xlsx) ----
+  function bytes(ex){
+      const sheetName=(ex.dir==='forward'?'Forward':'Backward');
+      const sheet=build(ex);
+      const files=[
+        {name:'[Content_Types].xml', data:enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`)},
+        {name:'_rels/.rels', data:enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`)},
+        {name:'xl/workbook.xml', data:enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`)},
+        {name:'xl/_rels/workbook.xml.rels', data:enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`)},
+        {name:'xl/styles.xml', data:enc.encode(STYLES)},
+        {name:'xl/worksheets/sheet1.xml', data:enc.encode(sheet)}
+      ];
+      return zip(files);
+  }
+  // ---- Public: build workbook & download ----
+  function report(id){
+    const ex=DB.exercises.find(x=>x.id===id); if(!ex){toast('Không tìm thấy đợt','bad');return;}
+    try{
+      const blob=new Blob([bytes(ex)],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+      a.download=(ex.dir==='forward'?'QA.F.029_Forward':'QA.F.030_Backward')+'_'+(ex.batch||'batch')+'.xlsx';
+      a.click(); URL.revokeObjectURL(a.href);
+      logAct('Xuất Excel báo cáo '+(ex.batch||'')); toast('Đã xuất file Excel (.xlsx)','ok');
+    }catch(e){ toast('Lỗi xuất Excel: '+e.message,'bad'); console.error(e); }
+  }
+  return { report, _bytes:bytes, _build:build, _zip:zip };
+})();
+
+/* ---------------------------- CÀI ĐẶT & DỮ LIỆU -------------------------- */
+function renderSettings(){
+  const wrap=$('#tab-settings');
+  wrap.innerHTML=`
+    <div class="page-h"><h2>Cài đặt & Dữ liệu</h2>
+      <span class="desc">Quản lý ngưỡng, danh bạ PIC, danh mục biểu mẫu và sao lưu.</span></div>
+
+    <div class="grid g2">
+      <div class="card pad">
+        <h3>Thông số</h3><hr class="hr">
+        <label class="fld"><span class="lb">Thời gian truy xuất tối đa (giờ)</span>
+          <input class="in" type="number" step="0.5" value="${DB.settings.maxHours}" onchange="Set.num('maxHours',this.value)"></label>
+        <label class="fld"><span class="lb">Ngưỡng deviation mass balance (%)</span>
+          <input class="in" type="number" step="0.1" value="${DB.settings.devLimit}" onchange="Set.num('devLimit',this.value)"></label>
+      </div>
+      <div class="card pad">
+        <h3>Sao lưu & Khôi phục</h3><hr class="hr">
+        <p class="muted" style="font-size:12.5px">Dữ liệu tự lưu trong trình duyệt (LocalStorage). Nên backup định kỳ ra file JSON.</p>
+        <div class="row">
+          <button class="btn pri" onclick="Store.exportJSON()">⬇ Xuất backup JSON</button>
+          <button class="btn" onclick="document.getElementById('importFile').click()">⬆ Phục hồi từ JSON</button>
+        </div><hr class="hr">
+        <button class="btn danger" onclick="Set.reset()">⚠ Đặt lại toàn bộ (xóa hết)</button>
+      </div>
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <h3>Thông tin người gửi email</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">Dùng cho câu mở đầu và chữ ký trong email khởi động truy xuất.</div><hr class="hr">
+      ${(()=>{const s=DB.settings.sender||defaultSender();return `
+      <div class="grid g3">
+        <label class="fld"><span class="lb">Họ tên</span><input class="in" value="${esc(s.name)}" onchange="Set.sender('name',this.value)"></label>
+        <label class="fld"><span class="lb">Tên gọi (câu mở đầu)</span><input class="in" value="${esc(s.short)}" onchange="Set.sender('short',this.value)" placeholder="VD: Bình"></label>
+        <label class="fld"><span class="lb">Chức danh</span><input class="in" value="${esc(s.title)}" onchange="Set.sender('title',this.value)"></label>
+        <label class="fld"><span class="lb">Mobile</span><input class="in" value="${esc(s.mobile)}" onchange="Set.sender('mobile',this.value)"></label>
+        <label class="fld"><span class="lb">E-Mail</span><input class="in" value="${esc(s.email)}" onchange="Set.sender('email',this.value)"></label>
+        <label class="fld"><span class="lb">Công ty</span><input class="in" value="${esc(s.company)}" onchange="Set.sender('company',this.value)"></label>
+      </div>
+      <label class="fld"><span class="lb">Địa chỉ (chữ ký)</span><textarea class="in" style="min-height:60px" onchange="Set.sender('address',this.value)">${esc(s.address)}</textarea></label>`;})()}
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between"><h3>Danh bạ PIC / bộ phận</h3>
+        <button class="btn sm" onclick="Set.addContact()">+ Thêm liên hệ</button></div><hr class="hr">
+      <table class="tbl"><thead><tr><th>Tên</th><th>Email</th><th>Bộ phận</th><th style="width:40px"></th></tr></thead>
+      <tbody>${DB.contacts.map((c,i)=>`<tr>
+        <td><input class="in" style="padding:5px 8px" value="${esc(c.name)}" onchange="Set.contact(${i},'name',this.value)"></td>
+        <td><input class="in" style="padding:5px 8px" value="${esc(c.email)}" onchange="Set.contact(${i},'email',this.value)"></td>
+        <td><input class="in" style="padding:5px 8px" value="${esc(c.dept)}" onchange="Set.contact(${i},'dept',this.value)"></td>
+        <td><button class="btn sm danger" style="padding:3px 8px" onclick="Set.delContact(${i})">✕</button></td></tr>`).join('')}
+      </tbody></table>
+      <div class="row" style="justify-content:space-between;margin-top:14px"><h4>Danh bạ Cc (email khởi động truy xuất)</h4>
+        <button class="btn sm" onclick="Set.addCc()">+ Thêm Cc</button></div>
+      <table class="tbl" style="margin-top:6px"><thead><tr><th>Tên</th><th>Email</th><th>Bộ phận</th><th style="width:40px"></th></tr></thead>
+      <tbody>${(DB.ccContacts||[]).map((c,i)=>`<tr>
+        <td><input class="in" style="padding:5px 8px" value="${esc(c.name)}" onchange="Set.cc(${i},'name',this.value)"></td>
+        <td><input class="in" style="padding:5px 8px" value="${esc(c.email)}" onchange="Set.cc(${i},'email',this.value)"></td>
+        <td><input class="in" style="padding:5px 8px" value="${esc(c.dept)}" onchange="Set.cc(${i},'dept',this.value)"></td>
+        <td><button class="btn sm danger" style="padding:3px 8px" onclick="Set.delCc(${i})">✕</button></td></tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <div class="row" style="justify-content:space-between">
+        <h3>Danh mục biểu mẫu (Annex 1)</h3>
+        <div class="muted" style="font-size:12px">Backward: ${DB.catalog.backward.reduce((a,g)=>a+g.forms.length,0)} form · Forward: ${DB.catalog.forward.reduce((a,g)=>a+g.forms.length,0)} form</div>
+      </div><hr class="hr">
+      <p class="muted" style="font-size:12.5px">Danh mục dùng làm khuôn để dựng checklist cho mỗi đợt mới. Sửa tại đây không ảnh hưởng đợt đã tạo.</p>
+      <div class="seg" style="margin-bottom:10px">
+        <button class="${catDir==='backward'?'on':''}" onclick="Set.catDir('backward')">Backward</button>
+        <button class="${catDir==='forward'?'on':''}" onclick="Set.catDir('forward')">Forward</button>
+      </div>
+      ${DB.catalog[catDir].map((g,gi)=>`<div style="margin-bottom:10px">
+        <div class="row" style="justify-content:space-between"><b>${esc(g.stage)} <span class="tag na">${esc(g.pic)}</span></b>
+          <button class="btn sm" onclick="Set.addForm(${gi})">+ biểu mẫu</button></div>
+        <div style="margin-top:6px">${g.forms.map((f,fi)=>`<div class="row" style="gap:6px;margin:2px 0">
+          <input class="in" style="padding:4px 8px" value="${esc(f)}" onchange="Set.form(${gi},${fi},this.value)">
+          <button class="btn sm danger" style="padding:3px 8px" onclick="Set.delForm(${gi},${fi})">✕</button></div>`).join('')}</div>
+      </div>`).join('')}
+    </div>
+
+    <div class="card pad" style="margin-top:14px">
+      <h3>Nhật ký thao tác</h3><hr class="hr">
+      <div style="max-height:220px;overflow:auto">${DB.log.length?DB.log.slice(0,50).map(l=>
+        `<div style="font-size:12.5px;padding:3px 0;border-bottom:1px solid var(--line)"><span class="muted">${fmtDate(l.t)}</span> — ${esc(l.msg)}</div>`).join(''):'<span class="muted">Chưa có</span>'}</div>
+    </div>`;
+}
+let catDir='backward';
+const Set={
+  num(k,v){ DB.settings[k]=+v||0; Store.save(); toast('Đã lưu thông số','ok'); },
+  contact(i,k,v){ DB.contacts[i][k]=v; Store.save(); },
+  addContact(){ DB.contacts.push({name:'Tên mới',email:'',dept:''}); Store.save(); renderSettings(); },
+  delContact(i){ DB.contacts.splice(i,1); Store.save(); renderSettings(); },
+  sender(k,v){ (DB.settings.sender||(DB.settings.sender=defaultSender()))[k]=v; Store.save(); toast('Đã lưu thông tin người gửi','ok'); },
+  cc(i,k,v){ DB.ccContacts[i][k]=v; Store.save(); },
+  addCc(){ (DB.ccContacts||(DB.ccContacts=[])).push({name:'Tên mới',email:'',dept:''}); Store.save(); renderSettings(); },
+  delCc(i){ DB.ccContacts.splice(i,1); Store.save(); renderSettings(); },
+  catDir(d){ catDir=d; renderSettings(); },
+  form(gi,fi,v){ DB.catalog[catDir][gi].forms[fi]=v; Store.save(); },
+  addForm(gi){ DB.catalog[catDir][gi].forms.push('Biểu mẫu mới'); Store.save(); renderSettings(); },
+  delForm(gi,fi){ DB.catalog[catDir][gi].forms.splice(fi,1); Store.save(); renderSettings(); },
+  reset(){ confirmBox('Đặt lại toàn bộ','Xóa hết đợt truy xuất và khôi phục dữ liệu mặc định. Không thể hoàn tác.',()=>{
+    DB=Store.defaults(); Store.save(); Nav.go('dashboard'); toast('Đã đặt lại','ok'); },'Xóa hết','danger'); }
+};
+
+/* ============================================================================
+   [UTILS] CSV
+   ==========================================================================*/
+function downloadCSV(rows,name){
+  const csv='﻿'+rows.map(r=>r.map(c=>`"${String(c??'').replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  URL.revokeObjectURL(a.href); toast('Đã xuất CSV','ok');
+}
+
+/* ============================================================================
+   [BOOT]
+   ==========================================================================*/
+function boot(){
+  DB = Store.load() || Store.defaults();
+  // vá dữ liệu thiếu (khi nâng cấp)
+  DB.settings ||= {maxHours:CFG.MAX_HOURS,devLimit:CFG.DEV_LIMIT};
+  DB.log ||= []; DB.contacts ||= JSON.parse(JSON.stringify(SEED_CONTACTS));
+  DB.ccContacts ||= JSON.parse(JSON.stringify(SEED_CC));
+  DB.settings.sender ||= defaultSender();   // migration: thông tin người gửi
+  // Bổ sung các liên hệ mẫu còn thiếu (Grasso/WTP) cho DB cũ
+  SEED_CONTACTS.forEach(sc=>{ if(!DB.contacts.some(c=>c.email===sc.email)) DB.contacts.push(JSON.parse(JSON.stringify(sc))); });
+  // Migration: bổ sung trace + mass model mới cho đợt tạo trước khi có tính năng này
+  DB.exercises.forEach(e=>{ if(!e.trace) e.trace=newTrace();
+    ['incoming','tipping','process','packing','fgs'].forEach(s=>e.trace[s]||=[]);
+    e.trace.participants ||= Array.from({length:8},()=>({name:'',dept:''}));
+    if(!e.mass || !e.mass.stage1) e.mass=newMass(); });
+  $$('.navbtn').forEach(b=>b.onclick=()=>Nav.go(b.dataset.tab));
+  Nav.go('dashboard');
+}
+// Chạy ngay nếu DOM đã sẵn sàng (script đặt cuối body), nếu không thì chờ sự kiện
+if(document.readyState==='loading') window.addEventListener('DOMContentLoaded',boot); else boot();
+window.addEventListener('beforeunload',()=>{ try{Store.save();}catch(e){} });
+</script>
+</body>
+</html>
