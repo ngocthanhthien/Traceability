@@ -467,6 +467,7 @@ nav#side .grp:first-child{display:none}
     <button class="navbtn" data-tab="report"><span class="ico">▤</span>Báo cáo tổng hợp</button>
     <div class="grp">Quản trị</div>
     <button class="navbtn" data-tab="settings"><span class="ico">⚙</span>Cài đặt & Dữ liệu</button>
+    <button class="navbtn hidden" data-tab="users" id="navUsers"><span class="ico">👥</span>Quản lý người dùng</button>
   </nav>
 
   <!-- ===================== MAIN VIEW ===================== -->
@@ -480,6 +481,7 @@ nav#side .grp:first-child{display:none}
     <section id="tab-mass" class="page hidden"></section>
     <section id="tab-report" class="page hidden"></section>
     <section id="tab-settings" class="page hidden"></section>
+    <section id="tab-users" class="page hidden"></section>
   </main>
 </div>
 
@@ -974,7 +976,7 @@ const Nav = {
     $('#tab-'+tab).classList.remove('hidden');
     stopCountdown();
     ({dashboard:renderDashboard,flow:renderFlow,exercise:renderExercise,email:renderEmail,
-      checklist:renderChecklist,trace:renderTrace,mass:renderMass,report:renderReport,settings:renderSettings}[tab])();
+      checklist:renderChecklist,trace:renderTrace,mass:renderMass,report:renderReport,settings:renderSettings,users:renderUsers}[tab])();
     $('#view').scrollTop=0;
   }
 };
@@ -2294,6 +2296,103 @@ const Set={
     DB=Store.defaults(); Store.save(); Nav.go('dashboard'); toast('Đã đặt lại','ok'); },'Xóa hết','danger'); }
 };
 
+/* ---------------------------- QUẢN LÝ NGƯỜI DÙNG (Admin, chế độ Firebase) -- */
+// Hồ sơ người dùng lưu ở /ildTraceUsers/<uid> = {name, email, role:'admin'|'user', active, createdAt, createdBy}.
+// Security Rules chỉ cho tài khoản active đọc/ghi dữ liệu, và chỉ Admin đọc/sửa danh sách này (không tự sửa chính mình).
+// Tài khoản đăng nhập tạo qua Identity Toolkit (signUp); "vô hiệu hóa" = active:false nên mất quyền dữ liệu ngay.
+const Usr = {
+  list:[], state:'idle', err:'',
+  async load(){
+    this.state='loading'; this.err=''; if(State.tab==='users') renderUsers();
+    try{
+      const o=await Cloud.req('GET','',undefined,false,Cloud.USERS)||{};
+      this.list=Object.keys(o).map(uid=>Object.assign({uid},o[uid])).filter(u=>u.email)
+        .sort((a,b)=>String(a.name||a.email).localeCompare(String(b.name||b.email),'vi'));
+      this.state='ok';
+    }catch(e){ this.state='error'; this.err=e&&e.denied?'Tài khoản của bạn không có quyền Admin.':'Không tải được danh sách. Kiểm tra kết nối rồi bấm Tải lại.'; }
+    if(State.tab==='users') renderUsers();
+  },
+  setRole(uid,role){
+    const u=this.list.find(x=>x.uid===uid); if(!u) return;
+    confirmBox('Đổi vai trò','Đổi vai trò của "'+(u.name||u.email)+'" thành '+(role==='admin'?'Admin (quản trị)':'User (nhân viên)')+'?',
+      ()=>this.patch(uid,{role},'Đổi vai trò '+u.email+' → '+role));
+  },
+  setActive(uid,active){
+    const u=this.list.find(x=>x.uid===uid); if(!u) return;
+    confirmBox(active?'Kích hoạt tài khoản':'Vô hiệu hóa tài khoản',
+      active?'Kích hoạt lại tài khoản "'+(u.name||u.email)+'"?'
+            :'Vô hiệu hóa tài khoản "'+(u.name||u.email)+'"? Người này sẽ không xem hay sửa được dữ liệu nữa. Dữ liệu đã nhập vẫn giữ nguyên.',
+      ()=>this.patch(uid,{active},(active?'Kích hoạt':'Vô hiệu hóa')+' tài khoản '+u.email), active?'Kích hoạt':'Vô hiệu hóa', !active);
+  },
+  async patch(uid,data,logMsg){
+    try{ await Cloud.req('PATCH','/'+uid,data,false,Cloud.USERS); logAct(logMsg); Store.save(); toast('Đã cập nhật','ok'); }
+    catch(e){ toast(e&&e.denied?'Không có quyền thực hiện thao tác này':'Cập nhật thất bại — kiểm tra kết nối','bad'); }
+    this.load();
+  },
+  openAdd(){
+    const m=document.createElement('div'); m.id='modal';
+    m.innerHTML=`<form class="box" onsubmit="Usr.submitAdd(event)">
+      <h3>Thêm người dùng mới</h3>
+      <label class="fld"><span class="lb">Họ và tên *</span><input class="in" name="name" required placeholder="Ví dụ: Nguyễn Văn A"></label>
+      <label class="fld"><span class="lb">Email đăng nhập *</span><input class="in" name="email" type="email" required autocomplete="off" placeholder="ten@ild-coffee.com"></label>
+      <label class="fld"><span class="lb">Mật khẩu ban đầu * (tối thiểu 6 ký tự)</span><input class="in" name="password" type="password" required minlength="6" autocomplete="new-password"></label>
+      <label class="fld"><span class="lb">Vai trò *</span><select class="in" name="role">
+        <option value="user" selected>User (nhân viên)</option><option value="admin">Admin (quản trị)</option></select></label>
+      <div id="usrAddErr" role="alert" style="color:var(--bad);font-size:12.5px;min-height:18px"></div>
+      <div class="acts"><button class="btn" type="button" onclick="document.getElementById('modal').remove()">Hủy</button>
+        <button class="btn pri" type="submit" id="usrAddBtn">Tạo tài khoản</button></div></form>`;
+    document.body.appendChild(m); m.querySelector('[name=name]').focus();
+  },
+  async submitAdd(ev){
+    ev.preventDefault(); const f=ev.target, btn=$('#usrAddBtn'), err=$('#usrAddErr');
+    const d={name:f.name.value.trim(),email:f.email.value.trim().toLowerCase(),password:f.password.value,role:f.role.value};
+    btn.disabled=true; err.textContent='';
+    try{
+      const uid=await Cloud.createAccount(d.email,d.password);
+      await Cloud.req('PUT','/'+uid,{name:d.name,email:d.email,role:d.role,active:true,createdAt:Date.now(),createdBy:Cloud.auth.email},false,Cloud.USERS);
+      logAct('Tạo tài khoản '+d.email+' ('+d.role+')'); Store.save();
+      $('#modal').remove(); toast('Đã tạo tài khoản '+d.email,'ok'); this.load();
+    }catch(e){ btn.disabled=false; err.textContent=e&&e.denied?'Tài khoản của bạn không có quyền Admin.':(e&&e.message)||'Không tạo được tài khoản.'; }
+  },
+  exportCSV(){
+    if(!this.list.length){ toast('Chưa có người dùng nào để xuất','warn'); return; }
+    downloadCSV([['Ho ten','Email','Vai tro','Trang thai','UID','Ngay tao']].concat(this.list.map(u=>
+      [u.name||'',u.email,u.role==='admin'?'Admin':'User',u.active?'Hoat dong':'Vo hieu hoa',u.uid,u.createdAt?fmtDate(u.createdAt):''])),'ild_traceability_users.csv');
+  }
+};
+function renderUsers(){
+  const wrap=$('#tab-users');
+  if(!Cloud.on||!Cloud.admin){ wrap.innerHTML=`<div class="page-h"><h2>Quản lý người dùng</h2></div>
+    ${emptyBox('Chỉ Admin dùng được mục này','Tab này chỉ hoạt động ở chế độ Firebase với tài khoản có vai trò Admin.')}`; return; }
+  if(Usr.state==='idle'){ Usr.load(); return; }
+  const me=Cloud.auth.uid;
+  const rows=Usr.list.map(u=>{ const self=u.uid===me, adm=u.role==='admin';
+    return `<tr>
+      <td><b>${esc(u.name||'—')}</b>${self?' <span class="muted" style="font-size:11.5px">(Bạn)</span>':''}</td>
+      <td class="muted">${esc(u.email)}</td>
+      <td><span class="tag ${adm?'b':'na'}">${adm?'Admin':'User'}</span></td>
+      <td><span class="tag ${u.active?'ok':'bad'}">${u.active?'Hoạt động':'Vô hiệu hóa'}</span></td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn sm" ${self?'disabled title="Không thể đổi vai trò của chính bạn"':''} onclick="Usr.setRole('${esc(u.uid)}','${adm?'user':'admin'}')">${adm?'Hạ xuống User':'Nâng lên Admin'}</button>
+        <button class="btn sm ${u.active?'danger':''}" ${self?'disabled title="Không thể khóa tài khoản của chính bạn"':''} onclick="Usr.setActive('${esc(u.uid)}',${!u.active})">${u.active?'Vô hiệu hóa':'Kích hoạt'}</button>
+      </td></tr>`; }).join('');
+  wrap.innerHTML=`
+    <div class="page-h"><h2>Quản lý người dùng</h2>
+      <span class="desc">Tài khoản đăng nhập, vai trò và trạng thái hoạt động. Tài khoản hiện tại: ${esc(Cloud.me&&Cloud.me.name||Cloud.auth.email)} · Admin.</span>
+      <span class="spacer"></span>
+      <button class="btn sm" onclick="Usr.load()">↻ Tải lại</button>
+      <button class="btn sm" onclick="Usr.exportCSV()">⬇ Xuất CSV</button>
+      <button class="btn pri" onclick="Usr.openAdd()">+ Thêm người dùng</button>
+    </div>
+    <div class="card pad">
+      ${Usr.err?`<div class="row" style="margin-bottom:10px"><span class="tag bad">Lỗi</span> ${esc(Usr.err)}</div>`:''}
+      <div style="overflow:auto"><table class="tbl" style="min-width:720px"><thead><tr>
+        <th>Họ và tên</th><th>Email đăng nhập</th><th style="width:110px">Vai trò</th><th style="width:130px">Trạng thái</th><th style="width:270px;text-align:right">Thao tác</th>
+        </tr></thead><tbody>${rows||`<tr><td colspan="5" class="muted" style="text-align:center;padding:24px">${Usr.state==='loading'?'Đang tải danh sách người dùng…':'Chưa có người dùng nào.'}</td></tr>`}</tbody></table></div>
+      <div class="muted" style="font-size:11.5px;margin-top:10px">Vô hiệu hóa chặn quyền xem/sửa dữ liệu ngay nhưng không xóa tài khoản đăng nhập. Đổi hoặc đặt lại mật khẩu thực hiện trong Firebase Console → Authentication.</div>
+    </div>`;
+}
+
 /* ============================================================================
    [UTILS] CSV
    ==========================================================================*/
@@ -2317,9 +2416,10 @@ function downloadCSV(rows,name){
    ==========================================================================*/
 const Cloud = {
   on: !!(FIREBASE.apiKey && FIREBASE.databaseURL),
-  ROOT:'ildTrace', AUTH_KEY:'ild_trace_cloud_auth_v1', UI_KEY:'ild_trace_cloud_ui_v1',
+  ROOT:'ildTrace', USERS:'ildTraceUsers', AUTH_KEY:'ild_trace_cloud_auth_v1', UI_KEY:'ild_trace_cloud_ui_v1',
   SHARED:['contacts','catalog','settings','flow','log'],
   auth:null,          // {idToken, refreshToken, exp, uid, email}
+  me:null, admin:false,   // hồ sơ của tài khoản đang đăng nhập (/ildTraceUsers/<uid>)
   synced:{},          // đơn vị -> chuỗi JSON đã khớp với Firebase
   ready:false, online:false, denied:false, es:null, timer:null, relTimer:null,
   pushing:false, again:false, lastSync:0, lastToast:0,
@@ -2351,13 +2451,31 @@ const Cloud = {
     this.setAuth({idToken:j.id_token,refreshToken:j.refresh_token||a.refreshToken,exp:Date.now()+(+j.expires_in||3600)*1000,uid:j.user_id||a.uid,email:a.email});
     return this.auth.idToken;
   },
-  async url(path){ return FIREBASE.databaseURL.replace(/\/+$/,'')+'/'+this.ROOT+path+'.json?auth='+encodeURIComponent(await this.token()); },
-  async req(method,path,body,keepalive){
-    const res=await fetch(await this.url(path),{method,keepalive:!!keepalive,
+  async url(path,root){ return FIREBASE.databaseURL.replace(/\/+$/,'')+'/'+(root||this.ROOT)+path+'.json?auth='+encodeURIComponent(await this.token()); },
+  async req(method,path,body,keepalive,root){
+    const res=await fetch(await this.url(path,root),{method,keepalive:!!keepalive,
       ...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
     if(res.status===401||res.status===403) throw {denied:true};
     if(!res.ok) throw new Error('HTTP '+res.status);
     return res.json();
+  },
+
+  // Tạo tài khoản đăng nhập mới (không ảnh hưởng phiên của Admin); trả về UID.
+  // Email đã có sẵn tài khoản: thử đăng nhập bằng đúng mật khẩu vừa nhập để lấy lại UID.
+  async createAccount(email,password){
+    const call=async api=>{ let res;
+      try{ res=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:'+api+'?key='+encodeURIComponent(FIREBASE.apiKey),
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})}); }
+      catch(e){ throw new Error('Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.'); }
+      const j=await res.json().catch(()=>({})); return {ok:res.ok,j,code:(j.error&&j.error.message)||''}; };
+    let r=await call('signUp');
+    if(!r.ok&&/EMAIL_EXISTS/.test(r.code)){ r=await call('signInWithPassword');
+      if(!r.ok) throw new Error('Email này đã có tài khoản đăng nhập với mật khẩu khác. Nhập đúng mật khẩu hiện tại của tài khoản đó, hoặc đặt lại mật khẩu trong Firebase Console.'); }
+    if(!r.ok) throw new Error(/WEAK_PASSWORD/.test(r.code)?'Mật khẩu quá yếu (tối thiểu 6 ký tự).'
+      : /INVALID_EMAIL/.test(r.code)?'Email không hợp lệ.'
+      : /OPERATION_NOT_ALLOWED|ADMIN_ONLY_OPERATION/.test(r.code)?'Firebase đang tắt việc tạo tài khoản từ ứng dụng. Tạo tài khoản trong Firebase Console.'
+      : 'Không tạo được tài khoản ('+(r.code||'lỗi không rõ')+').');
+    return r.j.localId;
   },
 
   /* ---- Chuyển đổi DB <-> đơn vị lưu trên Firebase ---- */
@@ -2507,7 +2625,7 @@ const Cloud = {
       <h3>Đồng bộ Firebase</h3><hr class="hr">
       ${!this.on?`<p class="muted" style="font-size:12.5px">Chưa cấu hình (hằng <b>FIREBASE</b> trong mã nguồn đang trống). Các tab nghiệp vụ đang lưu cục bộ trong trình duyệt này (LocalStorage).</p>`
       :`<div class="row"><span class="tag ${this.online?'ok':'bad'}">${this.online?'Đang kết nối':(this.denied?'Không có quyền ghi':'Mất kết nối — chỉ xem')}</span>
-          <span>${esc(a?a.email:'')}</span><span class="muted" style="font-size:12px">UID: ${esc(a?a.uid:'')}</span></div>
+          <span>${esc(a?a.email:'')}</span><span class="tag ${this.admin?'b':'na'}">${this.admin?'Admin':'User'}</span><span class="muted" style="font-size:12px">UID: ${esc(a?a.uid:'')}</span></div>
         <p class="muted" style="font-size:12.5px">Dữ liệu các tab nghiệp vụ dùng chung cho mọi tài khoản được cấp quyền và lưu tại <b>${esc(FIREBASE.databaseURL)}</b>/${this.ROOT}.
           Lần gửi gần nhất từ máy này: ${this.lastSync?fmtDate(this.lastSync):'—'}. Process Flow Web dùng server riêng, không nằm trong phần đồng bộ này.</p>`}
     </div>`;
@@ -2550,10 +2668,13 @@ const Cloud = {
     try{ tree=await this.req('GET',''); }
     catch(e){
       if(e&&e.auth){ this.auth=null; try{ localStorage.removeItem(this.AUTH_KEY); }catch(x){} this.loginBox('Phiên đăng nhập đã hết hạn. Đăng nhập lại.'); }
-      else if(e&&e.denied) this.loginBox('Tài khoản '+this.auth.email+' chưa được cấp quyền truy cập dữ liệu. Gửi UID này cho quản trị viên: '+this.auth.uid);
+      else if(e&&e.denied) this.loginBox('Tài khoản '+this.auth.email+' chưa được cấp quyền hoặc đã bị vô hiệu hóa. Liên hệ Admin (UID: '+this.auth.uid+').');
       else this.loginBox('Không kết nối được Firebase. Kiểm tra mạng rồi bấm Thử lại.');
       return;
     }
+    this.me=await this.req('GET','/'+this.auth.uid,undefined,false,this.USERS).catch(()=>null);
+    this.admin=!!(this.me&&this.me.role==='admin'&&this.me.active);
+    $('#navUsers').classList.toggle('hidden',!this.admin); Usr.state='idle';
     this.build(tree); migrate();
     this.ready=true; this.denied=false; $('#app').inert=false;
     const w=$('#cloudLogin'); if(w) w.remove();
