@@ -453,6 +453,7 @@ nav#side .grp:first-child{display:none}
   <nav id="side">
     <div class="grp">Tổng quan</div>
     <button class="navbtn" data-tab="dashboard"><span class="ico">▦</span>Dashboard</button>
+    <button class="navbtn" data-tab="flow"><span class="ico">⇩</span>Process Flow</button>
     <div class="grp">Thực hiện truy xuất</div>
     <button class="navbtn" data-tab="exercise"><span class="ico">▶</span>Đợt truy xuất<span class="badge" id="bg-ex">0</span></button>
     <button class="navbtn" data-tab="email"><span class="ico">✉</span>Soạn email</button>
@@ -467,6 +468,7 @@ nav#side .grp:first-child{display:none}
   <!-- ===================== MAIN VIEW ===================== -->
   <main id="view">
     <section id="tab-dashboard" class="page"></section>
+    <section id="tab-flow" class="page hidden"></section>
     <section id="tab-exercise" class="page hidden"></section>
     <section id="tab-email" class="page hidden"></section>
     <section id="tab-checklist" class="page hidden"></section>
@@ -765,6 +767,7 @@ const Store = {
                 forward:JSON.parse(JSON.stringify(SEED_FORWARD)) },
       settings:{ maxHours:CFG.MAX_HOURS, devLimit:CFG.DEV_LIMIT, sender:defaultSender() },
       current:null,            // id đợt đang chọn
+      flow:newFlow(),          // sơ đồ Process Flow (khối + mũi tên)
       log:[]                   // audit log
     };
   },
@@ -959,7 +962,7 @@ const Nav = {
     $$('.page').forEach(p=>p.classList.add('hidden'));
     $('#tab-'+tab).classList.remove('hidden');
     stopCountdown();
-    ({dashboard:renderDashboard,exercise:renderExercise,email:renderEmail,
+    ({dashboard:renderDashboard,flow:renderFlow,exercise:renderExercise,email:renderEmail,
       checklist:renderChecklist,trace:renderTrace,mass:renderMass,report:renderReport,settings:renderSettings}[tab])();
     $('#view').scrollTop=0;
   }
@@ -2005,6 +2008,168 @@ const Xlsx = (function(){
   return { report, _bytes:bytes, _build:build, _zip:zip };
 })();
 
+/* ---------------------------- PROCESS FLOW ------------------------------- */
+// Sơ đồ quy trình dạng đồ thị, lưu ở DB.flow:
+//  - Khối (node) là đối tượng kéo-thả được.
+//  - Mũi tên (edge) là quan hệ nhân–quả from → to: bám theo khối khi khối di chuyển,
+//    gắn lại được đầu mút sang khối/cạnh khác, dời được điểm gãy, thêm/xóa được.
+const FLOW_COLORS={gc:'#00B050',waste:'#ED7D31',by:'#F2F2F2',util:'#A6A6A6',wet:'#92D050',pm:'#A680B8',rework:'#FFC000',proc:'#CDE4F2',fg:'#FFF8F0'};
+// [id, kiểu, x, y, w, h, màu, nhãn]
+const FLOW_NODES=[
+  ['gc','oval',192,3,152,80,'gc','GC Bean'],['pre','box',205,165,127,68,'proc','Pre-cleaning &\nDestoning GC'],
+  ['dust','oval',721,168,120,60,'waste','Dust, stone,...'],['roast','box',212,316,113,60,'proc','Roasting'],
+  ['oil1','oval',515,317,120,56,'by','Coffee Oil'],['water','oval',5,413,120,56,'util','Water'],
+  ['ext','box',212,395,113,93,'proc','Extraction'],['aroma','oval',395,413,120,56,'by','Aroma'],
+  ['wet','oval',5,552,120,56,'wet','Wet Rework'],['evap','box',193,545,151,71,'proc','Evaporation'],
+  ['fpl','box',530,552,97,56,'by','F&P'],['rw1','oval',702,552,120,56,'rework','Rework'],
+  ['pm2','oval',5,663,120,56,'pm','PM 2'],['fgl','pill',522,725,104,47,'fg','FGs (Liquid)'],
+  ['n2','oval',5,781,120,56,'util','Nitrogen'],['fd','box',215,787,107,52,'proc','Freeze Drying'],
+  ['rw2','oval',682,785,120,56,'rework','Rework'],['air','oval',5,870,120,48,'util','Compressed air'],
+  ['oil2','oval',5,924,120,48,'by','Coffee Oil'],['fp','box',215,946,113,50,'proc','F&P'],
+  ['rw3','oval',685,944,120,56,'rework','Rework'],['pm1','oval',5,1051,120,48,'pm','PM 1'],
+  ['fg2','pill',222,1052,106,47,'fg','FGs (Liquid)']];
+// [from, cạnh, vị trí trên cạnh (0..1), to, cạnh, vị trí, điểm gãy (0..1), nét đứt]  — cạnh: T/B/L/R
+const FLOW_EDGES=[
+  ['gc','B',.5,'pre','T',.5],['pre','R',.5,'dust','L',.5],['pre','B',.5,'roast','T',.5],['roast','R',.5,'oil1','L',.5],
+  ['roast','B',.5,'ext','T',.5],['water','R',.5,'ext','L',.5],['ext','R',.5,'aroma','L',.5,.5,true],
+  ['aroma','B',.5,'evap','T',.84,.58],['ext','B',.5,'evap','T',.5],['wet','R',.5,'evap','L',.5],
+  ['evap','R',.5,'fpl','L',.5],['pm2','R',.5,'fpl','L',.84,.93],['fpl','R',.5,'rw1','L',.5],['fpl','B',.46,'fgl','T',.5],
+  ['evap','B',.5,'fd','T',.5],['n2','R',.5,'fd','L',.42],['fd','R',.5,'rw2','L',.5],['fd','B',.5,'fp','T',.47],
+  ['oil2','R',.5,'fp','L',.3,.7],['pm1','R',.5,'fp','L',.7,.28],['fp','R',.5,'rw3','L',.5],['fp','B',.5,'fg2','T',.467]];
+function newFlow(){ return {
+  nodes:FLOW_NODES.map(a=>({id:a[0],k:a[1],x:a[2],y:a[3],w:a[4],h:a[5],c:a[6],label:a[7]})),
+  edges:FLOW_EDGES.map(a=>({from:a[0],fs:a[1],ft:a[2],to:a[3],ts:a[4],tt:a[5],mid:a[6]??.5,dash:!!a[7]})) }; }
+
+const Flow = {
+  sel:-1, linking:false, linkFrom:null, drag:null,
+  data(){ const f=DB.flow; return (f&&f.nodes&&f.edges)?f:(DB.flow=newFlow()); },
+  node(id){ return this.data().nodes.find(n=>n.id===id); },
+  // Điểm neo của mũi tên trên biên khối (oval: nằm trên đường elip)
+  anchor(n,side,t){
+    t=Math.min(.9,Math.max(.1,+t||.5));
+    const u=(t-.5)*2, k=n.k==='oval'?Math.sqrt(1-u*u):1;
+    if(side==='T'||side==='B'){ const d=n.h/2*k; return {x:n.x+n.w*t, y:n.y+n.h/2+(side==='T'?-d:d)}; }
+    const d=n.w/2*k; return {x:n.x+n.w/2+(side==='L'?-d:d), y:n.y+n.h*t};
+  },
+  // Đường đi vuông góc giữa 2 điểm neo; mid = tay nắm điểm gãy (nếu có)
+  route(e){
+    const a=this.node(e.from), b=this.node(e.to); if(!a||!b) return null;
+    const p=this.anchor(a,e.fs,e.ft), q=this.anchor(b,e.ts,e.tt);
+    const h1=e.fs==='L'||e.fs==='R', h2=e.ts==='L'||e.ts==='R', m=+e.mid||.5;
+    if(h1&&h2){ if(Math.abs(p.y-q.y)<3) return {pts:[p,q]};
+      const x=p.x+(q.x-p.x)*m; return {pts:[p,{x,y:p.y},{x,y:q.y},q], mid:{x,y:(p.y+q.y)/2,ax:'x'}}; }
+    if(!h1&&!h2){ if(Math.abs(p.x-q.x)<3) return {pts:[p,q]};
+      const y=p.y+(q.y-p.y)*m; return {pts:[p,{x:p.x,y},{x:q.x,y},q], mid:{x:(p.x+q.x)/2,y,ax:'y'}}; }
+    return {pts:[p, h1?{x:q.x,y:p.y}:{x:p.x,y:q.y}, q]};
+  },
+  // Cạnh + vị trí gần con trỏ nhất trên 1 khối
+  sideAt(n,p){
+    const d={L:Math.abs(p.x-n.x),R:Math.abs(n.x+n.w-p.x),T:Math.abs(p.y-n.y),B:Math.abs(n.y+n.h-p.y)};
+    const s=Object.keys(d).sort((x,y)=>d[x]-d[y])[0];
+    const t=(s==='T'||s==='B')?(p.x-n.x)/n.w:(p.y-n.y)/n.h;
+    return {s,t:Math.min(.9,Math.max(.1,Math.round(t*100)/100))};
+  },
+  hit(p){ return this.data().nodes.slice().reverse().find(n=>p.x>=n.x-14&&p.x<=n.x+n.w+14&&p.y>=n.y-14&&p.y<=n.y+n.h+14); },
+  pt(ev){ const q=new DOMPoint(ev.clientX,ev.clientY).matrixTransform($('#flowSvg').getScreenCTM().inverse()); return {x:q.x,y:q.y}; },
+  fit(){ const s=$('#flowSvg'); if(!s)return; let W=860,H=1110;
+    this.data().nodes.forEach(n=>{ W=Math.max(W,n.x+n.w+20); H=Math.max(H,n.y+n.h+20); });
+    s.setAttribute('viewBox',`0 0 ${W} ${H}`); s.setAttribute('width',W); s.setAttribute('height',H); },
+  draw(){
+    const g=$('#flowG'); if(!g)return; const f=this.data();
+    const txt=(x,y,label)=>{ const L=String(label).split('\n');
+      return `<text x="${x}" y="${y-(L.length-1)*9}" text-anchor="middle" dominant-baseline="central" stroke="none">${L.map((s,i)=>`<tspan x="${x}" dy="${i?18:0}">${esc(s)}</tspan>`).join('')}</text>`; };
+    let edges='',hand='';
+    f.edges.forEach((e,i)=>{ const r=this.route(e); if(!r)return;
+      const pts=r.pts.map(p=>p.x+','+p.y).join(' '), on=i===this.sel;
+      edges+=`<polyline points="${pts}" fill="none" stroke="${on?'#2563EB':'#7f7f7f'}" stroke-width="${on?2.5:1.5}" ${e.dash?'stroke-dasharray="8 6"':''} marker-end="url(#flowArrow${on?'On':''})"/>
+        <polyline data-edge="${i}" points="${pts}" fill="none" stroke="transparent" stroke-width="14" pointer-events="stroke" style="cursor:pointer"/>`;
+      if(on){ const a=r.pts[0], b=r.pts[r.pts.length-1];
+        hand=`<circle data-h="s" cx="${a.x}" cy="${a.y}" r="6" fill="#fff" stroke="#2563EB" stroke-width="2" style="cursor:move"/>
+          <circle data-h="e" cx="${b.x}" cy="${b.y}" r="6" fill="#2563EB" stroke="#fff" stroke-width="2" style="cursor:move"/>`
+          +(r.mid?`<rect data-h="m" x="${r.mid.x-6}" y="${r.mid.y-6}" width="12" height="12" fill="#fff" stroke="#2563EB" stroke-width="2" style="cursor:${r.mid.ax==='x'?'ew-resize':'ns-resize'}"/>`:''); }
+    });
+    const nodes=f.nodes.map(n=>{ const src=n.id===this.linkFrom;
+      const st=`fill="${FLOW_COLORS[n.c]||'#fff'}" stroke="${src?'#2563EB':n.k==='pill'?'#D4A017':'#7f7f7f'}" stroke-width="${src?3:1.5}"`;
+      const shape=n.k==='oval'?`<ellipse cx="${n.x+n.w/2}" cy="${n.y+n.h/2}" rx="${n.w/2}" ry="${n.h/2}" ${st}/>`
+        :`<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" ${n.k==='pill'?`rx="${n.h/2}"`:''} ${st}/>`;
+      return `<g data-node="${esc(n.id)}" style="cursor:${this.linking?'crosshair':'grab'}">${shape}${txt(n.x+n.w/2,n.y+n.h/2,n.label)}</g>`; }).join('');
+    g.innerHTML=edges+nodes+hand;
+  },
+  bar(){
+    if(!$('#flowHint'))return; const e=this.data().edges[this.sel];
+    $('#flowDel').disabled=!e; $('#flowDash').disabled=!e;
+    $('#flowLink').classList.toggle('pri',this.linking);
+    const nm=id=>(this.node(id)||{label:'?'}).label.replace('\n',' ');
+    $('#flowHint').textContent = this.linking ? (this.linkFrom?'Bấm khối ĐÍCH (kết quả) của mũi tên.':'Bấm khối NGUỒN (nguyên nhân) của mũi tên.')
+      : e ? `Đang chọn: ${nm(e.from)} → ${nm(e.to)}. Kéo chấm tròn để gắn đầu mũi tên sang khối/cạnh khác; kéo ô vuông để dời điểm gãy.`
+      : 'Kéo khối để di chuyển — mũi tên tự bám theo. Bấm vào mũi tên để chọn.';
+  },
+  refresh(){ this.fit(); this.draw(); this.bar(); },
+  down(ev){
+    const t=ev.target, p=this.pt(ev), g=t.closest('[data-node]');
+    if(t.dataset.h) this.drag={type:t.dataset.h};
+    else if(g){ const id=g.dataset.node;
+      if(this.linking){
+        if(!this.linkFrom) this.linkFrom=id;
+        else if(id!==this.linkFrom){ const a=this.node(this.linkFrom), b=this.node(id);
+          const dx=(b.x+b.w/2)-(a.x+a.w/2), dy=(b.y+b.h/2)-(a.y+a.h/2), hz=Math.abs(dx)>Math.abs(dy);
+          this.data().edges.push({from:a.id,fs:hz?(dx>0?'R':'L'):(dy>0?'B':'T'),ft:.5,to:b.id,ts:hz?(dx>0?'L':'R'):(dy>0?'T':'B'),tt:.5,mid:.5,dash:false});
+          this.sel=this.data().edges.length-1; this.linking=false; this.linkFrom=null; Store.save(); }
+        this.refresh(); return; }
+      const n=this.node(id); this.sel=-1; this.drag={type:'node',id,dx:p.x-n.x,dy:p.y-n.y}; }
+    else if(t.dataset.edge!=null) this.sel=+t.dataset.edge;
+    else this.sel=-1;
+    if(this.drag) ev.currentTarget.setPointerCapture(ev.pointerId);
+    this.draw(); this.bar();
+  },
+  move(ev){
+    const d=this.drag; if(!d)return; const p=this.pt(ev), e=this.data().edges[this.sel];
+    if(d.type==='node'){ const n=this.node(d.id); n.x=Math.max(0,Math.round(p.x-d.dx)); n.y=Math.max(0,Math.round(p.y-d.dy)); }
+    else if(!e) return;
+    else if(d.type==='m'){ const a=this.anchor(this.node(e.from),e.fs,e.ft), b=this.anchor(this.node(e.to),e.ts,e.tt);
+      const hz=e.fs==='L'||e.fs==='R', span=hz?b.x-a.x:b.y-a.y;
+      if(span) e.mid=Math.min(.95,Math.max(.05,((hz?p.x-a.x:p.y-a.y)/span))); }
+    else{ const n=this.hit(p); if(!n)return; const s=this.sideAt(n,p);
+      if(d.type==='s'){ if(n.id===e.to)return; e.from=n.id; e.fs=s.s; e.ft=s.t; }
+      else{ if(n.id===e.from)return; e.to=n.id; e.ts=s.s; e.tt=s.t; } }
+    this.draw();
+  },
+  up(){ if(!this.drag)return; this.drag=null; Store.save(); this.refresh(); },
+  key(ev){
+    if((ev.key==='Delete'||ev.key==='Backspace')&&this.sel>=0){ ev.preventDefault(); this.del(); }
+    else if(ev.key==='Escape'){ this.linking=false; this.linkFrom=null; this.sel=-1; this.refresh(); }
+  },
+  toggleLink(){ this.linking=!this.linking; this.linkFrom=null; this.sel=-1; this.refresh(); },
+  dash(){ const e=this.data().edges[this.sel]; if(!e)return; e.dash=!e.dash; Store.save(); this.refresh(); },
+  del(){ if(this.sel<0)return; this.data().edges.splice(this.sel,1); this.sel=-1; Store.save(); this.refresh(); },
+  reset(){ confirmBox('Khôi phục sơ đồ mặc định','Vị trí các khối và toàn bộ mũi tên sẽ trở về sơ đồ ban đầu.',()=>{
+    DB.flow=newFlow(); this.sel=-1; this.linking=false; this.linkFrom=null; logAct('Khôi phục Process Flow mặc định'); Store.save(); renderFlow(); toast('Đã khôi phục sơ đồ','ok'); },'Khôi phục'); }
+};
+function renderFlow(){
+  $('#tab-flow').innerHTML=`
+    <div class="page-h"><h2>Process Flow</h2>
+      <span class="desc">Sơ đồ dòng chảy quy trình sản xuất — từ GC Bean đến thành phẩm.</span>
+      <span class="spacer"></span>
+      <button class="btn sm" id="flowLink" onclick="Flow.toggleLink()">+ Mũi tên</button>
+      <button class="btn sm" id="flowDash" onclick="Flow.dash()">Nét đứt / liền</button>
+      <button class="btn sm danger" id="flowDel" onclick="Flow.del()">✕ Xóa mũi tên</button>
+      <button class="btn sm" onclick="Flow.reset()">↺ Sơ đồ mặc định</button>
+    </div>
+    <div class="muted" id="flowHint" style="font-size:12.5px;margin-bottom:8px"></div>
+    <div class="card pad" style="overflow:auto">
+      <svg id="flowSvg" tabindex="0" role="img" aria-label="Process Flow" style="display:block;margin:0 auto;background:#fff;border-radius:8px;user-select:none;touch-action:none"
+        font-family="Segoe UI,Arial,sans-serif" font-size="15" fill="#1a2230"
+        onpointerdown="Flow.down(event)" onpointermove="Flow.move(event)" onpointerup="Flow.up()" onpointercancel="Flow.up()" onkeydown="Flow.key(event)">
+        <defs>
+          <marker id="flowArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7f7f7f"/></marker>
+          <marker id="flowArrowOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563EB"/></marker>
+        </defs>
+        <g id="flowG"></g>
+      </svg>
+    </div>`;
+  Flow.refresh();
+}
+
 /* ---------------------------- CÀI ĐẶT & DỮ LIỆU -------------------------- */
 function renderSettings(){
   const wrap=$('#tab-settings');
@@ -2130,6 +2295,7 @@ function boot(){
   DB.log ||= []; DB.contacts ||= JSON.parse(JSON.stringify(SEED_CONTACTS));
   DB.ccContacts ||= JSON.parse(JSON.stringify(SEED_CC));
   DB.settings.sender ||= defaultSender();   // migration: thông tin người gửi
+  if(!DB.flow || !DB.flow.nodes || !DB.flow.edges) DB.flow=newFlow();   // migration: sơ đồ Process Flow
   // Bổ sung các liên hệ mẫu còn thiếu (Grasso/WTP) cho DB cũ
   SEED_CONTACTS.forEach(sc=>{ if(!DB.contacts.some(c=>c.email===sc.email)) DB.contacts.push(JSON.parse(JSON.stringify(sc))); });
   // Migration: bổ sung trace + mass model mới cho đợt tạo trước khi có tính năng này
