@@ -142,6 +142,9 @@ table.tbl tr:hover td{background:#fafbfe}
 #modal h3{font-size:17px;margin-bottom:8px}
 #modal .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 
+/* ---- Chỉ xem (mất kết nối Firebase) ---- */
+.page[inert]{opacity:.7}
+
 /* ---- Empty ---- */
 .empty{text-align:center;padding:40px 20px;color:var(--ink-soft)}
 .empty .big{font-size:40px;opacity:.4;margin-bottom:8px}
@@ -535,6 +538,10 @@ const CFG = {
   DEV_LIMIT:0.5,               // Ngưỡng deviation mass balance (%)
   RETAIN_YEARS:5
 };
+// Đồng bộ Firebase cho các tab nghiệp vụ (Realtime Database + đăng nhập email/mật khẩu) — xem [CLOUD].
+// Để trống cả hai = chạy cục bộ bằng LocalStorage như trước. Đây là định danh công khai của web app,
+// không phải mật khẩu; quyền truy cập do Security Rules của Realtime Database quyết định.
+const FIREBASE = { apiKey:'', databaseURL:'' };
 
 // Thông tin người gửi email mặc định (có thể sửa trong Cài đặt)
 function defaultSender(){ return {
@@ -750,7 +757,8 @@ function newTraceRow(section){ const r={}; TRACE_SPEC[section].cols.forEach(c=>r
    [STORE] LocalStorage — auto save, backup, restore
    ==========================================================================*/
 const Store = {
-  save(){ try{ localStorage.setItem(CFG.KEY, JSON.stringify(DB)); flashSaved(); }
+  save(){ if(Cloud.on){ Cloud.changed(); return; }      // chế độ Firebase: gửi lên cloud, không ghi LocalStorage
+          try{ localStorage.setItem(CFG.KEY, JSON.stringify(DB)); flashSaved(); }
           catch(e){ toast('Lỗi lưu dữ liệu: '+e.message,'bad'); } },
   load(){
     try{
@@ -786,7 +794,9 @@ const Store = {
     r.onload=()=>{ try{
         const obj=JSON.parse(r.result);
         if(!obj.exercises||!obj.catalog) throw new Error('File không đúng định dạng');
-        DB=obj; Store.save(); Nav.go(State.tab); toast('Đã phục hồi dữ liệu','ok');
+        const apply=()=>{ DB=obj; migrate(); Store.save(); Nav.go(State.tab); toast('Đã phục hồi dữ liệu','ok'); };
+        if(Cloud.on) confirmBox('Phục hồi lên Firebase','Dữ liệu chung trên Firebase của cả nhóm sẽ bị thay bằng nội dung file này. Không thể hoàn tác.',apply,'Phục hồi','danger');
+        else apply();
       }catch(e){ toast('Restore lỗi: '+e.message,'bad'); }
       input.value='';
     };
@@ -2194,7 +2204,7 @@ function renderSettings(){
       </div>
       <div class="card pad">
         <h3>Sao lưu & Khôi phục</h3><hr class="hr">
-        <p class="muted" style="font-size:12.5px">Dữ liệu tự lưu trong trình duyệt (LocalStorage). Nên backup định kỳ ra file JSON.</p>
+        <p class="muted" style="font-size:12.5px">${Cloud.on?'Dữ liệu lưu chung trên Firebase.':'Dữ liệu tự lưu trong trình duyệt (LocalStorage).'} Nên backup định kỳ ra file JSON.</p>
         <div class="row">
           <button class="btn pri" onclick="Store.exportJSON()">⬇ Xuất backup JSON</button>
           <button class="btn" onclick="document.getElementById('importFile').click()">⬆ Phục hồi từ JSON</button>
@@ -2202,6 +2212,8 @@ function renderSettings(){
         <button class="btn danger" onclick="Set.reset()">⚠ Đặt lại toàn bộ (xóa hết)</button>
       </div>
     </div>
+
+    ${Cloud.card()}
 
     <div class="card pad" style="margin-top:14px">
       <h3>Thông tin người gửi email</h3>
@@ -2278,7 +2290,7 @@ const Set={
   form(gi,fi,v){ DB.catalog[catDir][gi].forms[fi]=v; Store.save(); },
   addForm(gi){ DB.catalog[catDir][gi].forms.push('Biểu mẫu mới'); Store.save(); renderSettings(); },
   delForm(gi,fi){ DB.catalog[catDir][gi].forms.splice(fi,1); Store.save(); renderSettings(); },
-  reset(){ confirmBox('Đặt lại toàn bộ','Xóa hết đợt truy xuất và khôi phục dữ liệu mặc định. Không thể hoàn tác.',()=>{
+  reset(){ confirmBox('Đặt lại toàn bộ','Xóa hết đợt truy xuất và khôi phục dữ liệu mặc định'+(Cloud.on?' — áp dụng cho dữ liệu chung trên Firebase của cả nhóm':'')+'. Không thể hoàn tác.',()=>{
     DB=Store.defaults(); Store.save(); Nav.go('dashboard'); toast('Đã đặt lại','ok'); },'Xóa hết','danger'); }
 };
 
@@ -2293,11 +2305,282 @@ function downloadCSV(rows,name){
 }
 
 /* ============================================================================
+   [CLOUD] Đồng bộ Firebase cho các tab nghiệp vụ cũ — Realtime Database qua REST,
+   không dùng SDK/CDN. Bật khi FIREBASE có đủ apiKey + databaseURL.
+   Khi bật, Firebase là nguồn dữ liệu duy nhất: phải đăng nhập (email/mật khẩu) và
+   có mạng mới sửa được; mất kết nối thì chỉ xem. LocalStorage không giữ dữ liệu nghiệp vụ.
+   Cấu trúc (mỗi đơn vị là 1 chuỗi JSON để giữ nguyên mảng rỗng):
+     /ildTrace/s/<contacts|catalog|settings|flow|log> = {json, at, by}
+     /ildTrace/ex/<id đợt>                             = {json, at, by}
+   Hai máy sửa cùng 1 đơn vị: bản lưu sau ghi đè (riêng nhật ký thì gộp).
+   Process Flow Web (iframe, server Python) KHÔNG đi qua module này.
+   ==========================================================================*/
+const Cloud = {
+  on: !!(FIREBASE.apiKey && FIREBASE.databaseURL),
+  ROOT:'ildTrace', AUTH_KEY:'ild_trace_cloud_auth_v1', UI_KEY:'ild_trace_cloud_ui_v1',
+  SHARED:['contacts','catalog','settings','flow','log'],
+  auth:null,          // {idToken, refreshToken, exp, uid, email}
+  synced:{},          // đơn vị -> chuỗi JSON đã khớp với Firebase
+  ready:false, online:false, denied:false, es:null, timer:null, relTimer:null,
+  pushing:false, again:false, lastSync:0, lastToast:0,
+
+  /* ---- Đăng nhập (Identity Toolkit REST) ---- */
+  async signIn(email,password){
+    let res;
+    try{ res=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key='+encodeURIComponent(FIREBASE.apiKey),
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})}); }
+    catch(e){ throw new Error('Không kết nối được máy chủ đăng nhập. Kiểm tra mạng rồi thử lại.'); }
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok){ const c=(j.error&&j.error.message)||'';
+      throw new Error(/INVALID_LOGIN_CREDENTIALS|EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_EMAIL/.test(c)?'Email hoặc mật khẩu không đúng.'
+        : /USER_DISABLED/.test(c)?'Tài khoản đã bị khóa.'
+        : /TOO_MANY_ATTEMPTS/.test(c)?'Đăng nhập sai quá nhiều lần. Thử lại sau ít phút.'
+        : 'Đăng nhập không thành công ('+(c||res.status)+').'); }
+    this.setAuth({idToken:j.idToken,refreshToken:j.refreshToken,exp:Date.now()+(+j.expiresIn||3600)*1000,uid:j.localId,email:j.email});
+  },
+  setAuth(a){ this.auth=a;
+    try{ localStorage.setItem(this.AUTH_KEY,JSON.stringify({refreshToken:a.refreshToken,uid:a.uid,email:a.email})); }catch(e){} },
+  // Trả về ID token còn hạn; tự làm mới bằng refresh token
+  async token(){
+    const a=this.auth; if(!a) throw {auth:true};
+    if(a.idToken && Date.now()<a.exp-60000) return a.idToken;
+    const res=await fetch('https://securetoken.googleapis.com/v1/token?key='+encodeURIComponent(FIREBASE.apiKey),
+      {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(a.refreshToken)});
+    if(!res.ok){ if(res.status===400||res.status===401||res.status===403) throw {auth:true}; throw new Error('HTTP '+res.status); }
+    const j=await res.json();
+    this.setAuth({idToken:j.id_token,refreshToken:j.refresh_token||a.refreshToken,exp:Date.now()+(+j.expires_in||3600)*1000,uid:j.user_id||a.uid,email:a.email});
+    return this.auth.idToken;
+  },
+  async url(path){ return FIREBASE.databaseURL.replace(/\/+$/,'')+'/'+this.ROOT+path+'.json?auth='+encodeURIComponent(await this.token()); },
+  async req(method,path,body,keepalive){
+    const res=await fetch(await this.url(path),{method,keepalive:!!keepalive,
+      ...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
+    if(res.status===401||res.status===403) throw {denied:true};
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    return res.json();
+  },
+
+  /* ---- Chuyển đổi DB <-> đơn vị lưu trên Firebase ---- */
+  units(){
+    const u={ 's/contacts':JSON.stringify({contacts:DB.contacts,ccContacts:DB.ccContacts}), 's/catalog':JSON.stringify(DB.catalog),
+      's/settings':JSON.stringify(DB.settings), 's/flow':JSON.stringify(DB.flow), 's/log':JSON.stringify(DB.log) };
+    DB.exercises.forEach(e=>{ u['ex/'+e.id]=JSON.stringify(e); });
+    return u;
+  },
+  parse(v){ try{ return v&&typeof v.json==='string'?JSON.parse(v.json):null; }catch(e){ return null; } },
+  setShared(k,o){
+    if(k==='contacts'){ if(o.contacts) DB.contacts=o.contacts; if(o.ccContacts) DB.ccContacts=o.ccContacts; }
+    else DB[k]=o;
+  },
+  // Dựng DB từ cây dữ liệu Firebase (thiếu phần nào thì dùng mặc định)
+  build(tree){
+    DB=Store.defaults(); this.synced={};
+    const s=(tree&&tree.s)||{}, ex=(tree&&tree.ex)||{};
+    this.SHARED.forEach(k=>{ const o=this.parse(s[k]); if(o){ this.setShared(k,o); this.synced['s/'+k]=s[k].json; } });
+    Object.keys(ex).forEach(id=>{ const o=this.parse(ex[id]); if(o&&o.id){ DB.exercises.push(o); this.synced['ex/'+o.id]=ex[id].json; } });
+    DB.exercises.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+    let cur=null; try{ cur=localStorage.getItem(this.UI_KEY); }catch(e){}
+    DB.current = DB.exercises.some(e=>e.id===cur) ? cur : (DB.exercises.length?DB.exercises[DB.exercises.length-1].id:null);
+  },
+
+  /* ---- Gửi thay đổi lên Firebase ---- */
+  changed(){
+    if(!this.ready) return;
+    try{ localStorage.setItem(this.UI_KEY,DB.current||''); }catch(e){}
+    if(this.online) this.pill('Đang lưu…');
+    clearTimeout(this.timer); this.timer=setTimeout(()=>this.push(),800);
+  },
+  async push(keepalive){
+    if(!this.ready) return;
+    if(this.pushing){ this.again=true; return; }
+    const u=this.units(), patch={}, now=Date.now();
+    for(const k in u) if(u[k]!==this.synced[k]) patch[k]={json:u[k],at:now,by:this.auth.email};
+    for(const k in this.synced) if(!(k in u)) patch[k]=null;
+    if(!Object.keys(patch).length){ if(this.online) this.pill('☁ Đã đồng bộ'); return; }
+    this.pushing=true;
+    try{
+      await this.req('PATCH','',patch,keepalive);
+      for(const k in patch){ if(patch[k]) this.synced[k]=patch[k].json; else delete this.synced[k]; }
+      this.lastSync=now; this.setState(true);
+    }catch(e){ this.fail(e); }
+    finally{ this.pushing=false; if(this.again){ this.again=false; this.push(); } }
+  },
+  fail(e){
+    if(e&&e.auth){ this.signOut('Phiên đăng nhập đã hết hạn. Đăng nhập lại.'); return; }
+    this.denied=!!(e&&e.denied); this.setState(false);
+  },
+
+  /* ---- Nhận thay đổi từ máy khác (REST streaming / EventSource) ---- */
+  async listen(){
+    this.stop();
+    const es=this.es=new EventSource(await this.url(''));
+    es.addEventListener('put',ev=>this.remote(JSON.parse(ev.data),false));
+    es.addEventListener('patch',ev=>this.remote(JSON.parse(ev.data),true));
+    es.addEventListener('auth_revoked',()=>this.relisten(0));
+    es.addEventListener('cancel',()=>{ this.denied=true; this.stop(); this.setState(false); });
+    es.onopen=()=>{ this.denied=false; this.setState(true); this.push(); };
+    es.onerror=()=>{ if(this.es!==es) return; this.setState(false); if(es.readyState===2) this.relisten(5000); };
+  },
+  stop(){ clearTimeout(this.relTimer); if(this.es){ this.es.close(); this.es=null; } },
+  relisten(delay){ clearTimeout(this.relTimer);
+    this.relTimer=setTimeout(()=>{ this.listen().catch(e=>{ if(e&&e.auth) this.fail(e); else this.relisten(15000); }); },delay); },
+  remote(msg,isPatch){
+    if(!this.ready||!msg) return;
+    const segs=String(msg.path||'/').split('/').filter(Boolean);
+    this.snap=this.units(); this.touched={};
+    if(isPatch) Object.keys(msg.data||{}).forEach(k=>this.applyAt(segs.concat(k.split('/').filter(Boolean)),msg.data[k]));
+    else this.applyAt(segs,msg.data);
+    this.snap=null;
+    if(this.touched.repull){ this.req('GET','').then(t=>this.remote({path:'/',data:t},false)).catch(e=>this.fail(e)); return; }
+    if(Object.keys(this.touched).length) this.afterRemote(this.touched);
+  },
+  applyAt(segs,data){
+    const group=(g,o,full)=>{ o=o||{};
+      Object.keys(o).forEach(k=>this.unit(g+'/'+k,o[k]));
+      if(g==='ex'&&full) Object.keys(this.synced).forEach(k=>{ if(k.startsWith('ex/')&&!(k.slice(3) in o)) this.unit(k,null); }); };
+    if(segs.length===0){ group('s',data&&data.s); group('ex',data&&data.ex,true); }
+    else if(segs.length===1){ if(segs[0]==='s'||segs[0]==='ex') group(segs[0],data,true); }
+    else if(segs.length===2) this.unit(segs.join('/'),data);
+    else this.touched.repull=true;       // ghi lẻ từng trường (không do app này tạo) -> tải lại toàn bộ
+  },
+  // Áp 1 đơn vị từ Firebase vào DB, trừ khi máy này đang có sửa đổi chưa gửi cho đơn vị đó
+  unit(key,val){
+    const local=this.snap[key], dirty=local!==undefined&&local!==this.synced[key];
+    if(val==null){
+      if(key.startsWith('ex/')&&key in this.synced&&!dirty){
+        DB.exercises=DB.exercises.filter(e=>'ex/'+e.id!==key); delete this.synced[key]; this.touched.ex=true; }
+      return;
+    }
+    const json=val.json; if(typeof json!=='string'||json===this.synced[key]) return;
+    if(json===local){ this.synced[key]=json; return; }          // tiếng vọng của chính lần gửi vừa rồi
+    const o=this.parse(val); if(o==null) return;
+    if(key==='s/log'){                                            // nhật ký: gộp, không ghi đè
+      const seen={}, all=[];
+      (Array.isArray(o)?o:[]).concat(DB.log).forEach(l=>{ const id=l.t+'|'+l.msg; if(!seen[id]){ seen[id]=1; all.push(l); } });
+      DB.log=all.sort((a,b)=>b.t-a.t).slice(0,500); this.synced[key]=json; this.touched.s=true;
+      if(JSON.stringify(DB.log)!==json) this.changed();
+      return;
+    }
+    if(dirty) return;
+    if(key.startsWith('ex/')){ if(!o.id) return;
+      const i=DB.exercises.findIndex(e=>e.id===o.id); if(i>=0) DB.exercises[i]=o; else DB.exercises.push(o);
+      this.touched.ex=true; }
+    else if(key.startsWith('s/')&&this.SHARED.includes(key.slice(2))){ this.setShared(key.slice(2),o); this.touched[key.slice(2)==='flow'?'flow':'s']=true; }
+    else return;
+    this.synced[key]=json;
+  },
+  // Vẽ lại tab đang mở sau khi nhận dữ liệu mới, nhưng không cắt ngang lúc người dùng đang nhập
+  afterRemote(t){
+    migrate();
+    if(!DB.exercises.some(e=>e.id===DB.current)) DB.current=DB.exercises.length?DB.exercises[DB.exercises.length-1].id:null;
+    $('#bg-ex').textContent=DB.exercises.length;
+    const a=document.activeElement, view=$('#view');
+    const typing=a&&view.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+    if(State.tab==='flow'){ if(t.flow&&window.ILD_FLOW_REFERENCE&&!Flow.drag) Flow.refresh(); return; }
+    if(typing||$('#modal')||State.tab==='email'){
+      if(Date.now()-this.lastToast>10000){ this.lastToast=Date.now(); toast('Có cập nhật từ máy khác — sẽ hiển thị khi chuyển tab'); }
+      return; }
+    const top=view.scrollTop; Nav.go(State.tab); view.scrollTop=top;
+  },
+
+  /* ---- Trạng thái kết nối & giao diện ---- */
+  pill(t){ const p=$('#savePill'); if(p) p.textContent=t; },
+  setState(online){
+    this.online=online;
+    $$('.page').forEach(p=>{ p.inert=!online; });          // mất kết nối: chỉ xem
+    this.pill(online?'☁ Đã đồng bộ':(this.denied?'⚠ Không có quyền ghi — chỉ xem':'⚠ Mất kết nối — chỉ xem'));
+    const r=$('#cloudRetry'); if(r) r.classList.toggle('hidden',online);
+    const imp=$('#topbar button[onclick*="importFile"]'); if(imp) imp.disabled=!online;
+    if(State.tab==='settings'&&!$('#view').contains(document.activeElement)){ const c=$('#cloudCard'); if(c) c.outerHTML=this.card(); }
+  },
+  retry(){ this.pill('Đang kết nối lại…'); this.relisten(0); },
+  topbar(){
+    if($('#cloudOut')) return;
+    const mk=(id,text,fn)=>{ const b=document.createElement('button'); b.className='mini'; b.type='button'; b.id=id; b.textContent=text; b.onclick=fn; return b; };
+    const out=mk('cloudOut','Đăng xuất',()=>this.signOut()); out.title=this.auth.email||'';
+    const re=mk('cloudRetry','↻ Kết nối lại',()=>this.retry()); re.classList.add('hidden');
+    const ref=$('#savePill'); ref.after(re); $('#topbar').appendChild(out);
+  },
+  card(){
+    const a=this.auth;
+    return `<div class="card pad" id="cloudCard" style="margin-top:14px">
+      <h3>Đồng bộ Firebase</h3><hr class="hr">
+      ${!this.on?`<p class="muted" style="font-size:12.5px">Chưa cấu hình (hằng <b>FIREBASE</b> trong mã nguồn đang trống). Các tab nghiệp vụ đang lưu cục bộ trong trình duyệt này (LocalStorage).</p>`
+      :`<div class="row"><span class="tag ${this.online?'ok':'bad'}">${this.online?'Đang kết nối':(this.denied?'Không có quyền ghi':'Mất kết nối — chỉ xem')}</span>
+          <span>${esc(a?a.email:'')}</span><span class="muted" style="font-size:12px">UID: ${esc(a?a.uid:'')}</span></div>
+        <p class="muted" style="font-size:12.5px">Dữ liệu các tab nghiệp vụ dùng chung cho mọi tài khoản được cấp quyền và lưu tại <b>${esc(FIREBASE.databaseURL)}</b>/${this.ROOT}.
+          Lần gửi gần nhất từ máy này: ${this.lastSync?fmtDate(this.lastSync):'—'}. Process Flow Web dùng server riêng, không nằm trong phần đồng bộ này.</p>`}
+    </div>`;
+  },
+  loginBox(msg,busy){
+    let w=$('#cloudLogin');
+    if(!w){ w=document.createElement('div'); w.id='cloudLogin';
+      w.style.cssText='position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:16px;background:var(--bg);overflow:auto';
+      document.body.appendChild(w); }
+    w.innerHTML=`<form class="card pad" style="width:100%;max-width:380px" onsubmit="Cloud.submit(event)">
+      <h2 style="font-size:18px">Đăng nhập</h2>
+      <div class="muted" style="font-size:12.5px;margin:4px 0 14px">Hệ thống Truy xuất Nguồn gốc · dữ liệu dùng chung trên Firebase</div>
+      <label class="fld"><span class="lb">Email</span><input class="in" type="email" name="email" autocomplete="username" required ${busy?'disabled':''} value="${esc(this.auth?this.auth.email:'')}"></label>
+      <label class="fld"><span class="lb">Mật khẩu</span><input class="in" type="password" name="password" autocomplete="current-password" required ${busy?'disabled':''}></label>
+      <div id="cloudLoginMsg" role="alert" style="font-size:12.5px;min-height:18px;margin-bottom:8px;overflow-wrap:anywhere;color:${busy?'var(--ink-soft)':'var(--bad)'}">${esc(msg||'')}</div>
+      <div class="row"><button class="btn pri" type="submit" style="flex:1" ${busy?'disabled':''}>Đăng nhập</button>
+        ${!busy&&this.auth?`<button class="btn" type="button" onclick="Cloud.resume()">Thử lại</button>`:''}</div>
+    </form>`;
+  },
+  submit(ev){
+    ev.preventDefault(); const f=ev.target, email=f.email.value.trim(), pw=f.password.value;
+    this.loginBox('Đang đăng nhập…',true);
+    this.signIn(email,pw).then(()=>this.enter(),e=>{ this.auth=null; this.loginBox(e.message); });
+  },
+  resume(){ this.loginBox('Đang tải dữ liệu…',true); this.enter(); },
+  // Chạy 1 lần lúc khởi động khi chế độ Firebase đang bật
+  start(){
+    $('#app').inert=true;
+    window.addEventListener('offline',()=>{ if(this.ready) this.setState(false); });
+    window.addEventListener('online',()=>{ if(this.ready) this.retry(); });
+    window.addEventListener('pagehide',()=>{ if(this.ready){ clearTimeout(this.timer); this.push(true); } });
+    setInterval(()=>{ if(this.ready&&this.online) this.relisten(0); },45*60000);   // token sống 1 giờ
+    let saved=null; try{ saved=JSON.parse(localStorage.getItem(this.AUTH_KEY)||'null'); }catch(e){}
+    if(saved&&saved.refreshToken){ this.auth={idToken:'',exp:0,refreshToken:saved.refreshToken,uid:saved.uid,email:saved.email}; this.resume(); }
+    else this.loginBox('');
+  },
+  // Sau khi có phiên đăng nhập: tải dữ liệu, mở app, bắt đầu nghe thay đổi
+  async enter(){
+    let tree;
+    try{ tree=await this.req('GET',''); }
+    catch(e){
+      if(e&&e.auth){ this.auth=null; try{ localStorage.removeItem(this.AUTH_KEY); }catch(x){} this.loginBox('Phiên đăng nhập đã hết hạn. Đăng nhập lại.'); }
+      else if(e&&e.denied) this.loginBox('Tài khoản '+this.auth.email+' chưa được cấp quyền truy cập dữ liệu. Gửi UID này cho quản trị viên: '+this.auth.uid);
+      else this.loginBox('Không kết nối được Firebase. Kiểm tra mạng rồi bấm Thử lại.');
+      return;
+    }
+    this.build(tree); migrate();
+    this.ready=true; this.denied=false; $('#app').inert=false;
+    const w=$('#cloudLogin'); if(w) w.remove();
+    this.topbar(); this.setState(true); Nav.go('dashboard');
+    this.listen().catch(()=>this.relisten(5000));
+    if(!tree){                                   // Firebase còn trống: đề nghị đưa dữ liệu cục bộ của máy này lên
+      const local=Store.load();
+      if(local&&local.exercises&&local.exercises.length)
+        confirmBox('Đưa dữ liệu máy này lên Firebase','Firebase chưa có dữ liệu. Trình duyệt này đang lưu cục bộ '+local.exercises.length+' đợt truy xuất. Đưa lên làm dữ liệu chung?',()=>{
+          DB=local; migrate(); logAct('Đưa dữ liệu cục bộ lên Firebase'); Store.save(); Nav.go('dashboard'); },'Đưa lên');
+    }
+  },
+  async signOut(msg){
+    if(this.ready&&this.online&&!msg){ clearTimeout(this.timer); await this.push(); }
+    this.stop(); this.ready=false;
+    try{ localStorage.removeItem(this.AUTH_KEY); }catch(e){}
+    if(msg){ this.auth=null; $('#app').inert=true; this.loginBox(msg); } else location.reload();
+  }
+};
+
+/* ============================================================================
    [BOOT]
    ==========================================================================*/
-function boot(){
-  DB = Store.load() || Store.defaults();
-  // vá dữ liệu thiếu (khi nâng cấp)
+// Vá dữ liệu thiếu (khi nâng cấp, sau Restore, hoặc sau khi nhận dữ liệu từ Firebase)
+function migrate(){
+  DB.exercises ||= [];
+  DB.catalog ||= { backward:JSON.parse(JSON.stringify(SEED_BACKWARD)), forward:JSON.parse(JSON.stringify(SEED_FORWARD)) };
   DB.settings ||= {maxHours:CFG.MAX_HOURS,devLimit:CFG.DEV_LIMIT};
   DB.log ||= []; DB.contacts ||= JSON.parse(JSON.stringify(SEED_CONTACTS));
   DB.ccContacts ||= JSON.parse(JSON.stringify(SEED_CC));
@@ -2312,7 +2595,12 @@ function boot(){
     ['incoming','tipping','process','packing','fgs'].forEach(s=>e.trace[s]||=[]);
     e.trace.participants ||= Array.from({length:8},()=>({name:'',dept:''}));
     if(!e.mass || !e.mass.stage1) e.mass=newMass(); });
+}
+function boot(){
   $$('.navbtn').forEach(b=>b.onclick=()=>Nav.go(b.dataset.tab));
+  if(Cloud.on){ Cloud.start(); return; }       // Firebase: đăng nhập rồi mới tải dữ liệu
+  DB = Store.load() || Store.defaults();
+  migrate();
   Nav.go('dashboard');
 }
 // [HANDOFF-BUNDLE] Download only the explicitly embedded source files.
