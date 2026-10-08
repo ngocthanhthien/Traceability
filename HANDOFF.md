@@ -1,225 +1,162 @@
-# HAND-OFF — iLD Coffee Traceability App
+# HANDOFF CHO CLAUDE AI — iLD Process Flow Traceability
 
-Tài liệu bàn giao để một AI/model khác (hoặc chat mới) tiếp tục chỉnh sửa ứng dụng mà không cần lịch sử hội thoại. Đọc hết phần này trước khi sửa code.
+Ngày bàn giao: 08/10/2026. Đây là tài liệu hiện hành. `HANDOFF_LEGACY.md` chỉ dùng tham khảo lịch sử của app offline.
 
----
+## 1. Yêu cầu người dùng đã chốt
 
-## 1. Tổng quan
+- Process Flow là nơi trung tâm để thực hiện truy xuất tại nhà máy cà phê iLD.
+- Mỗi đại diện dùng máy riêng, truy cập web server nội bộ, đăng nhập và nhập dữ liệu công đoạn được giao.
+- Một công đoạn có nhiều mẻ/PO. Một mẻ có nhiều đầu vào và nhiều đầu ra, bao gồm rework.
+- Kết nối đầu ra công đoạn trước với đầu vào công đoạn sau; tính mass balance và truy ngược/xuôi từ vị trí đã có thông tin.
+- Giao diện được gộp trong **một file HTML duy nhất** để bàn giao và tiếp tục chỉnh sửa.
+- Một HTML không thay thế backend: giữ server cho đăng nhập, phân quyền và dữ liệu chung. Không biến đăng nhập thành kiểm tra mật khẩu bằng JavaScript hoặc LocalStorage.
+- Ngôn ngữ giao diện tiếng Việt, nhận diện iLD Crafted nâu/kem. Không yêu cầu chuyển framework hay dùng dịch vụ cloud.
 
-- **Sản phẩm:** Một ứng dụng web **1 file HTML duy nhất**, chạy **offline**, lưu dữ liệu bằng **LocalStorage**, phục vụ hệ thống **Truy xuất nguồn gốc (Traceability)** cho nhà máy cà phê hòa tan sấy thăng hoa **iLD Coffee Vietnam**.
-- **File chính (deliverable):** `D:\14_TRACEABILITY\Traceability App\iLD_Traceability_App.html`
-- **Người dùng:** 1 QA coordinator, dùng trên PC (Windows, Chrome). Không cần server, không cần internet.
-- **Chuẩn tham chiếu:** FSSC 22000 v5.1 · BRC issue 9 · IFS Food v7.
-- **Ngôn ngữ UI:** Tiếng Việt (có song ngữ Anh ở báo cáo).
-- **Phong cách giao diện:** "Industrial Dashboard — Light", màu chủ đạo xanh dương `--brand:#0b5cab`.
+## 2. Bàn giao những gì
 
-### Ràng buộc kỹ thuật BẮT BUỘC giữ nguyên
-1. **Chỉ 1 file HTML** — toàn bộ CSS + JS inline, KHÔNG tách file, KHÔNG thư viện ngoài, KHÔNG CDN.
-2. **Offline tuyệt đối** — không fetch mạng. Lưu trữ = LocalStorage (key `ild_trace_v1`).
-3. Vanilla JS thuần (ES6+), không framework. Vẫn chia module rõ bằng comment vùng mã.
-4. Dùng được trên Chrome/Edge hiện đại. `localStorage`, `btoa`, `Blob`, `URL.createObjectURL` đều OK.
+Chỉ cần gửi cho Claude **`index.html` và `HANDOFF.md`** để đọc toàn bộ nguồn hiện tại. HTML chứa cả giao diện legacy, template giao diện web và gói mã nguồn backend/tài liệu/tests nhúng trong JSON. Không chứa dữ liệu nhà máy, DB hay thông tin đăng nhập thực tế.
 
----
+| Thành phần trong HTML | Vai trò và cách sửa |
+|---|---|
+| HTML/CSS/JS ngoài template | Các tab legacy: dashboard, exercise, email, checklist, trace, mass, report, settings và sơ đồ tham chiếu |
+| `<template id="ild-lan-template">` | Nguồn giao diện Process Flow Web; CSS/JS nội bộ được cách ly trong iframe |
+| `BEGIN ILD LAN FRAGMENT` / `END ILD LAN FRAGMENT` | Marker server dùng để trích giao diện web. Giữ nguyên, mỗi marker xuất hiện một lần ở dạng literal |
+| `<script id="ild-backend-bundle" type="application/json">` | Gói nguồn bổ trợ: `files` là mapping đường dẫn tương đối → nội dung UTF-8. Không phải script thực thi |
+| `downloadServerBundle()` | Nút Tải bộ server tạo ZIP từ nguồn nhúng qua ZIP writer có sẵn, không lấy DOM đang chạy hoặc dữ liệu LocalStorage |
 
-## 2. Cách chạy & kiểm thử
+**Không còn dùng `lan/app.html`.** Khi làm việc trong repo, sửa UI tại template trong `index.html`; sửa backend ở `lan/server.py`. Sau khi sửa file bổ trợ, chạy `python tools/sync_handoff_bundle.py` để cập nhật bản nhúng. Không sửa độc lập cả backend nhúng lẫn file server gây lệch phiên bản. Script chỉ đóng gói danh sách file nguồn cố định, không quét/thêm thư mục data.
 
-- **Chạy:** double-click file HTML → mở bằng Chrome. Script đặt cuối `<body>`, boot ngay (`if(document.readyState==='loading') addEventListener('DOMContentLoaded',boot); else boot();`).
-- **Kiểm thử (không mở trình duyệt):** dùng **jsdom** trong môi trường Node (sandbox Linux).
-  - Cài: `cd /tmp && npm install jsdom` (lưu ý: `/tmp` reset giữa các lần chạy bash → cài lại nếu mất).
-  - Nạp file, `runScripts:'dangerously'`, rồi `w.eval('boot()')` (jsdom không tự fire DOMContentLoaded đúng lúc — gọi boot() tay để test).
-  - Biến/hàm **khai báo bằng `function`** là global (gọi được qua `w.eval`); biến `const`/`let` top-level KHÔNG lên window — test qua `dom.window.eval('...')`.
-  - **Kiểm cú pháp nhanh:** trích `<script>` ra file .js rồi `node --check`.
-  - **Kiểm .xlsx:** ghi bytes ra file, mở bằng `openpyxl` (python) để xác nhận Excel đọc được.
-  - **Kiểm .eml:** parse bằng `email` (python) để xác nhận header + body UTF-8 giải mã đúng.
-- Sau mỗi chỉnh sửa: chạy lại smoke test điều hướng 8 tab + `node --check`.
+## 3. Khôi phục repo từ HTML bàn giao
 
----
+Cách dễ nhất: mở HTML bằng trình duyệt, bấm **Tải bộ server**, giải nén ZIP, rồi đặt **file index.html gốc** cạnh `START_WEB.cmd`. Giữ tên `index.html` vì server đọc đúng tên này. Đọc `lan/README.md`.
 
-## 3. Kiến trúc & bố cục code (theo thứ tự trong `<script>`)
+Nếu Claude có môi trường xử lý file, có thể trích JSON giữa thẻ script `ild-backend-bundle`, parse bằng JSON rồi ghi từng `files[name]` dưới một thư mục đầu ra. Trước khi ghi, kiểm tra đường dẫn đã resolve vẫn nằm trong thư mục đó; không ghi đè repo khác hoặc file người dùng mà chưa kiểm tra. Không dùng regex lấy toàn bộ mọi script làm JavaScript vì có script JSON.
 
-Các vùng mã đánh dấu bằng comment `[TÊN]`:
+Gói đi kèm gồm server, hai file CMD, tài liệu nghiệp vụ/handoff, tests và script đồng bộ gói. Sau khi trích, dùng file HTML nhận được làm `index.html`. DB được tạo khi setup, không được gửi kèm gói.
 
-- `[CONFIG]` — `CFG` (KEY, MAX_HOURS=4, DEV_LIMIT=0.5, RETAIN_YEARS=5) + `defaultSender()`.
-- `[SEED]` — dữ liệu hạt giống:
-  - `SEED_CONTACTS` (To), `SEED_CC` (Cc) — danh bạ PIC/email.
-  - `SEED_BACKWARD`, `SEED_FORWARD` — danh mục biểu mẫu Annex 1 theo công đoạn/PIC.
-  - `TRACE_SPEC`, `TRACE_ORDER`, `newTrace()`, `newTraceRow()` — tab Chi tiết truy xuất.
-  - `MB_STAGES` (cũ, còn khai báo nhưng KHÔNG dùng nữa — có thể xóa).
-  - Mass balance: `mkStageRow()`, `newMass()`, `stageSummary()`, `massCalc()`.
-  - `evalExercise()` — đánh giá đạt/không.
-- `[STORE]` — `Store` (save/load/defaults/exportJSON/importJSON).
-- `[STATE]` — `DB` (toàn bộ dữ liệu), `State`, `currentEx()`, `logAct()`.
-- `[UTILS]` — `$ $$ esc uid fmtDate fmtDay toast flashSaved confirmBox`.
-- `[LOGIC]` — helpers: `buildChecklist checklistStats picProgress timeStatus fmtDur massCalc evalExercise`.
-- `[UI]` — `Nav` (điều hướng tab) + các `render*()` cho từng tab + module hành vi.
-- `[XLSX]` — module `Xlsx` tự sinh file .xlsx (zip + OOXML) không cần thư viện.
-- `[BOOT]` — `boot()` + migration + đăng ký sự kiện.
+## 4. Chạy và các URL
 
-### 8 Tab (sidebar)
-`dashboard, exercise, email, checklist, trace, mass, report, settings`
-Map trong `Nav.go()`: `{dashboard:renderDashboard, exercise:renderExercise, email:renderEmail, checklist:renderChecklist, trace:renderTrace, mass:renderMass, report:renderReport, settings:renderSettings}`.
+Yêu cầu Python 3.12+, thư viện chuẩn. Không cần npm/framework để vận hành.
 
-Mỗi tab có `<section id="tab-XXX" class="page">`. Mỗi module hành vi là một object: `Ex` (đợt), `Cl` (checklist), `Tr` (chi tiết truy xuất), `Mb` (mass balance), `Email`, `Rep`, `Set`, `Xlsx`.
-
----
-
-## 4. Data model (LocalStorage `DB`)
-
-```
-DB = {
-  exercises: [ Exercise ],   // danh sách đợt truy xuất
-  contacts:  [ {name,email,dept} ],      // To
-  ccContacts:[ {name,email,dept} ],      // Cc
-  catalog:   { backward:[{stage,pic,forms:[...]}], forward:[...] }, // khuôn checklist
-  settings:  { maxHours:4, devLimit:0.5, sender:{...} },
-  current:   "<exerciseId>" | null,      // đợt đang chọn
-  log:       [ {t,msg} ]                 // audit log
-}
-
-settings.sender = { name, short, title, mobile, email, company, address }
-  // 'short' = tên gọi dùng ở câu mở đầu email ("<short> xin gửi yêu cầu...")
-
-Exercise = {
-  id, createdAt, status:'draft'|'running'|'closed',
-  batch, material, matNo, purpose, scenario,
-  dir:'backward'|'forward',
-  startAt, finishAt,          // epoch ms; đồng hồ đếm ngược 4h
-  checklist: [ {stage,pic,items:[{id,form,status:''|'yes'|'no'|'na',receivedAt,remark}]} ],
-  mass:  Mass,                // xem mục 6
-  trace: Trace,               // xem mục 5
-  capa, conclusion
-}
+```powershell
+python lan/server.py --init-admin
+python lan/server.py
 ```
 
-Migration (trong `boot()`): tự thêm `trace`, `mass` (model mới), `ccContacts`, `settings.sender`, và merge liên hệ seed còn thiếu (Grasso/WTP) cho DB cũ. **Khi thêm field mới vào model, PHẢI thêm migration tương ứng ở boot() để DB cũ không vỡ.**
+Hoặc chạy `SETUP_ADMIN.cmd` rồi `START_WEB.cmd`. Không có mật khẩu mặc định. Tạo tài khoản đầu tiên bằng terminal, nhập mật khẩu ẩn ít nhất 12 ký tự. Nếu DB đã có người dùng, không khởi tạo lại.
 
----
+- `/`, `/lan`, `/lan/`: server trích template trong index.html và phục vụ giao diện Process Flow Web độc lập.
+- `/legacy`: toàn bộ giao diện cũ; tab Process Flow dùng iframe srcdoc từ cùng template, không fetch một HTML thứ hai.
+- Mở index.html trực tiếp bằng file://: các tab offline vẫn hoạt động; Process Flow Web chỉ xem trước màn hình đăng nhập, có thông báo cách chạy server và không cho gửi đăng nhập qua file://. Nút Sơ đồ tham chiếu offline mở sơ đồ kéo thả cũ.
+- Localhost mặc định: http://127.0.0.1:8080.
+- Dùng mạng nội bộ cần HTTPS/reverse proxy hoặc `--host 0.0.0.0 --cert ... --key ...`. Server không cho bind LAN HTTP thuần. Xem README cho proxy Host và backup.
 
-## 5. Tab "Chi tiết truy xuất" (trace) — theo mẫu QA.F.029 / QA.F.030
+Chưa cấu hình DNS, HTTPS, firewall, dịch vụ Windows hay triển khai cho máy trạm nhà máy. Không tự xem pilot là đã triển khai production.
 
-Nguồn: `D:\14_TRACEABILITY\QA.F.029 Forward Traceability Report.xlsx`, `QA.F.029-030 Traceability report,v2.xlsx`, `Traceability Report - 29.05_42080028F1.xlsx`.
+## 5. Backend và mô hình dữ liệu hiện có
 
-```
-Trace = {
-  reason, participants:[{name,dept}] (8 dòng),
-  incoming:[row], tipping:[row], process:[row], packing:[row], fgs:[row]
-}
-```
-- `TRACE_SPEC` định nghĩa cột mỗi section. Có 2 loại:
-  - `kind:'flat'` (incoming, fgs): bảng phẳng (Material No, Supplier, Batch, SSCC, dates, Qty, Customer...).
-  - `kind:'io'` (tipping, process, packing): có nhóm cột **INPUT / OUTPUT** + cột **Gap tự tính = inQty − outQty**.
-- `TRACE_ORDER.forward = [incoming,tipping,process,packing,fgs]`; `backward` đảo ngược. Report & tab tự đảo theo `ex.dir`.
-- Báo cáo (`renderReport`) layout chính thức **8 mục**: 1 Thời gian · 2 Người tham gia · 3 Loại · 4 Lý do · 5 Thông tin truy xuất · 6 Kết quả (các section + Mass Balance) · 7 Kết luận (4 tiêu chí BRC) · 8 Điểm cải thiện + ký duyệt.
+`lan/server.py` dùng ThreadingHTTPServer và SQLite WAL trên đĩa cục bộ server. Ghi qua BEGIN IMMEDIATE để kiểm tra phiên bản và tổng phân bổ trong cùng transaction. Không đặt SQLite trên SMB hoặc mở nhiều server từ các máy khác nhau vào một file mạng.
 
----
+Bảng DB:
 
-## 6. Tab "Mass Balance" — LOGIC ILD (quan trọng, bám sát file thực tế)
+- `users`: id, username, name, role (`admin`, `qa`, `operator`), stages (JSON), password scrypt, active.
+- `sessions`: hash token, user_id, expires. Token bearer ngẫu nhiên, phiên 8 giờ. UI chỉ giữ token trong bộ nhớ.
+- `cases`: id, name, version, status (`open`, `closed`), created, snapshot.
+- `events`: id, case_id, version, status, author, data JSON, updated.
+- `history`: thời gian, người, action, entity, before/after JSON. Không giới hạn 500 dòng như legacy.
+- `login_attempts`: giới hạn thử đăng nhập sai theo địa chỉ và username.
 
-Nguồn logic: `D:\14_TRACEABILITY\ORGANIC MASSBALANCE SUMMARY_ILD.xlsx` (sheet **"ILD summary"** chứa công thức gốc) và `..._Olam.xlsx` (tham khảo logic cơ bản).
+Phiếu `event.data`:
 
-### Mô hình (`newMass()`)
-```
-Mass = {
-  factors:{ roastYield:0.84, fgSolid:0.97 },
-  solidFromExtraction:'',   // M9 — Tổng Solid từ Extraction thực tế (kg)
-  reworkAddSolid:'',        // cộng thêm vào Output thực tế FGs (basis solid)
-  unknownLimit:0.5,         // % ngưỡng
-  stage1:[ row(Nhập hàng,roasted:false), row(Tipping,false), row(Roaster,roasted:true), row(Grinder,roasted:true) ],
-  stage2:[ row(Extraction,isFG:false), row(Evaporation,false), row(FMT,false), row(FGs,isFG:true) ],
-  note:''
-}
-row = {stage,batch,nsx,po,input,downgrade,loss,sampling,instock,actualOut,record,remark, roasted?|isFG?}
+```text
+stage, title, po, pic, equipment, start, end,
+evidence, note, customer, limit, limitReason,
+inputs[], outputs[], contexts[]
 ```
 
-### Công thức (`massCalc()` — đã kiểm khớp 100% với sheet ILD)
-Mỗi dòng có **hệ số quy đổi về basis nhóm**:
-- Stage 1 quy về **GC (Green Coffee)**: dòng `roasted:true` (Roaster, Grinder) nhân `1/roastYield` (tức ÷0.84).
-- Stage 2 quy về **Total Solid**: dòng `isFG:true` (FGs) nhân `fgSolid` (×0.97).
+Mỗi dòng vật liệu: `id, material, batch, sscc, location, qty, unit, basis, factor, factorEvidence, kind`. Input liên kết thêm `sourceEvent, sourceLine`. Input kind: external/linked/opening. Output kind: product/rework/reject/sample/loss/stock. `contexts` là các ID phiếu Utility/CIP được đại diện chọn.
 
-Cho mỗi nhóm:
+Stages: incoming, tipping, roasting, extraction, evaporation, liquid, drying, packing, warehouse, packaging, ingredients, rework, utility. Khi thêm stage phải cập nhật STAGES/STAGE_IDS backend và positions/route trong template UI.
+
+ID nội bộ mới là định danh liên kết. Không tự nối lô bằng chuỗi batch; nhiều mã giống nhau có thể thuộc nguồn khác nhau. Dữ liệu sự kiện hiện được giới hạn trong từng đợt, chưa dùng lại genealogy giữa các đợt.
+
+## 6. API chính
+
+Tất cả trả JSON; request ghi dùng Content-Type application/json. Ngoài login, API yêu cầu Authorization: Bearer token. Origin nếu có phải phù hợp Host. Không có CORS mở rộng.
+
+| Endpoint | Chức năng |
+|---|---|
+| POST /api/login | username/password → token/user |
+| POST /api/logout | Xóa session |
+| GET /api/state?case=ID | User, stages, cases, case, users, events kèm balance |
+| POST /api/users | Admin tạo người dùng và công đoạn |
+| POST /api/cases | QA/admin tạo đợt |
+| POST /api/events | `{id?, caseId, version, data}`; kiểm quyền, phiên bản, nguồn và phân bổ |
+| POST /api/transition | `{id, version, action, reason?}`; submit/verify/reopen |
+| POST /api/close | `{id, version}`; snapshot và khóa đợt |
+| GET /api/export?case=ID | JSON đợt hoặc snapshot đã đóng |
+| GET /api/audit | QA/admin xem 200 thao tác gần nhất; DB vẫn giữ toàn bộ |
+
+## 7. Quy tắc đang thực thi
+
+- Operator sửa công đoạn trong stages được giao; QA/admin sửa toàn bộ, xác minh và đóng đợt. Tên PIC là người được phân công, khác người thực sự thao tác trong audit.
+- Nháp → gửi xác nhận → verified. Sửa verified phải QA reopen có lý do. Cập nhật/reopen nguồn làm phiếu phụ thuộc đã gửi/xác minh chuyển needs_review.
+- Kiểm `version` khi lưu/chuyển trạng thái; stale version trả 409, không ghi đè.
+- Liên kết nguồn chỉ nhận output product/rework/stock, giữ material/batch/SSCC/unit. Tổng cấp cho mọi phiếu không vượt lượng output. Phiếu đang nháp cũng giữ phần phân bổ.
+- Không xóa output đang có người nhận, đổi định danh của nguồn đang dùng hoặc tạo vòng giao dịch. Rework nhiều thế hệ phải là sự kiện mới dù mã batch có thể giữ nguyên.
+- Truy bằng `traceSet()`: BFS/visited ID theo edges(). Cả hai = hợp của truy ngược và truy xuôi riêng từ cùng mẻ gốc; không duyệt đồ thị vô hướng làm lan sang mọi nhánh cùng tổ tiên.
+- Search Batch/PO/SSCC neo vào phiếu/mẻ chứa thông tin tìm được. Chưa truy chính xác riêng từng phần của một output trong mẻ trộn.
+- Balance: Σ(qty × factor) input/output từng basis. Thiếu factor/căn cứ hoặc thiếu một phía → incomplete. Từng basis kiểm sai lệch riêng, không bù chéo nhóm. Utility → not_applicable. QA verify cần balance ok, căn cứ ngưỡng và nguồn/context verified.
+- Input external là ranh giới truy xuất/chứng từ ngoài app; không có nghĩa đã chứng minh đủ nguồn gốc.
+- Poll 15 giây khi không đang nhập. Dirty form giữ nguyên; người dùng lưu rõ ràng. Refresh có xác nhận bỏ bản chưa lưu.
+- Đóng đợt cần mọi phiếu verified, lưu snapshot và cấm thay đổi. Chưa có reopen đợt đã đóng.
+
+## 8. Tình trạng legacy và các lỗi nghiệp vụ còn tồn tại
+
+Legacy dùng `ild_trace_v1` trong LocalStorage, khác DB server. Các tab trace/mass/report legacy không tự tổng hợp dữ liệu Process Flow mới. Không xóa/migrate tự động dữ liệu này.
+
+Các phát hiện đã có trong DE_XUAT_CAI_TIEN_TRUY_XUAT.md, **chưa được sửa trong logic legacy**:
+
+- evalExercise coi đủ hồ sơ khi có ít nhất 1 yes và không có no, bỏ qua ô chưa đánh dấu.
+- Báo cáo coi liên kết công đoạn đạt chỉ dựa vào cs.done > 0.
+- Unknown deviation = |1 − N1×N2| có thể che hai sai lệch bù trừ.
+- Chưa kiểm đủ dữ liệu cầu nối GC/Solid. Ngày receipt/production có chỗ lấy ngày đợt.
+- Balance phụ thuộc dòng đầu/cuối trong khi cho thêm/xóa; mảng rỗng có thể lỗi.
+- Quy tắc GC khác nhau giữa slide training và batch coding; không tự chuẩn hóa mã lịch sử khi chưa có SOP hiện hành.
+- `reworkAddSolid` chú thích là dry solid nhưng công thức nhân lại fgSolid; phải kiểm Excel gốc/định nghĩa trước khi đổi.
+
+Tài liệu 4 PPTX có tổng 63 slide đã được đọc trong phiên trước, nhưng không nhúng file PPTX vào HTML. Các Excel/Word/PDF được handoff cũ nhắc tới chưa được kiểm chứng ở vòng triển khai này. Không tuyên bố đạt tiêu chuẩn/audit dựa trên phiên bản ghi trong legacy.
+
+## 9. Việc Claude cần ưu tiên hoàn thiện
+
+1. Quản trị tài khoản: đổi/reset mật khẩu, vô hiệu hóa tài khoản, thu hồi phiên, quy trình cấp quyền và kiểm thử phân quyền. Hiện UI mới có tạo tài khoản.
+2. Làm rõ phạm vi đợt và các công đoạn không áp dụng; mọi phiếu hiện verified chưa đủ chứng minh không bỏ sót công đoạn.
+3. Bàn giao hai bên: lượng xuất và lượng thực nhận độc lập, trạng thái xác nhận và lý do chênh lệch. Hiện mới kiểm tổng phân bổ/tiêu hao.
+4. Quản lý file chứng cứ an toàn, phiên bản, gắn event/lot; hiện chỉ mã/tham chiếu file.
+5. Chuẩn hóa mass balance với QA: units, basis, solid/moisture/yield, tồn đầu/cuối, nhánh liquid/powder, PM, rework, hệ số có phê duyệt. Không áp dụng 0.84/0.97 mù quáng.
+6. Cải thiện đồ thị: drill-down từ công đoạn tới mẻ và output cụ thể, xem lượng/chứng cứ trên cạnh, tránh đường chồng và không dùng vị trí mũi tên làm dữ liệu nguồn gốc.
+7. Cân nhắc genealogy dùng chung giữa đợt, import SAP/CSV chống trùng, migration legacy có xem trước/map/đối chiếu và backup.
+8. Báo cáo chính thức QA.F.029/030 từ DB mới. Giữ báo cáo cũ để đối chiếu; chưa tuyên bố hai hệ thống dữ liệu đã hợp nhất.
+9. Triển khai và nghiệm thu với IT: HTTPS, backup/restore, vận hành dịch vụ, đo tải và thử từ nhiều máy thực. Chưa triển khai production.
+
+Không cần làm tất cả trong một lần. Trước mỗi thay đổi, kiểm mã đang có, chọn phạm vi theo yêu cầu tiếp theo của người dùng và giữ migration dữ liệu cũ.
+
+## 10. Kiểm thử và bàn giao lại
+
+```powershell
+python -m unittest discover -s tests -p test_lan.py -v
+python tests/serve_fixture.py
+# Trong terminal khác, nếu có Playwright và Chrome:
+node tests/browser_lan.cjs
+python tools/sync_handoff_bundle.py
 ```
-Output lý thuyết (theo) = INPUT(dòng đầu) − Σ(downgrade·k) − Σ(loss·k) − Σ(sampling·k) − Σ(instock·k)
-Output thực tế (actual) = actualOut(dòng cuối) · k(dòng cuối)   // stage2 cộng thêm reworkAddSolid trước khi ×k
-Tỉ lệ thu hồi (recovery)= actual / theo
-Gap = 1 − recovery
-```
-Nối 2 stage:
-```
-N9 (GC→Solid) = solidFromExtraction / s1.actual
-Hệ số chuyển đổi tổng (overall) = s1.recovery × N9 × s2.recovery   // range tham khảo 25–53%
-Unknown deviation (%) = |1 − s1.recovery × s2.recovery| × 100      // mục tiêu < 0.5%
-hasData = (stage1[0].input>0 && grinder.actualOut>0)
-```
-`evalExercise().massOk = hasData && unknownDev <= unknownLimit`.
 
-**Số liệu demo trong sheet ILD để đối chiếu khi test** (phải ra đúng): INPUT=30000, Tipping instock=9700, Grinder downgrade=252 & actualOut=8116, M9≈14002.857, Extraction input=3624, FGs downgrade=100/sampling=1/actualOut=3475, reworkAddSolid=380 → **N1=48.31%, N9=144.93%, N2=106.05%, overall=74.25%, unknownDev=48.77%** (demo cố ý không cân bằng).
+Có thể đặt PLAYWRIGHT_MODULE là đường dẫn module Playwright sẵn có và BROWSER_CHANNEL là chrome/edge phù hợp. Fixture ở localhost:8097, DB test mới trong .test-output, không dùng tài khoản fixture cho dữ liệu thật. Dừng fixture sau kiểm thử. Không cần Playwright để vận hành ứng dụng.
 
-> Lưu ý: model mass balance hiện FIXED 2 stage đặc thù cà phê (coffee-specific). Hệ số 0.84/0.97 chỉnh được trong tab Cài đặt-mass.
+Đã kiểm sau gộp: 11 test server đạt; tất cả JavaScript thực thi kiểm cú pháp đạt; Chrome kiểm login/save/verify/liên kết/truy hai chiều/report/audit/tài khoản/phân quyền/mobile; thêm login thật trong iframe srcdoc, 9 tab legacy file://, trạng thái preview offline và chuyển sang sơ đồ tham chiếu.
 
----
+Khi sửa thêm cần kiểm export ZIP nguồn nhúng, parse JSON bundle và so từng file với source repo. Không đưa data/, .test-output/, mật khẩu hoặc TLS key vào file bàn giao. Sau thay đổi backend/docs/tests, chạy sync bundle rồi mới gửi HTML.
 
-## 7. Tab "Soạn email" — khởi động quy trình truy xuất
+## 11. Prompt tiếp tục cho Claude
 
-Nguồn mẫu: `D:\14_TRACEABILITY\QA_DIEN_TAP_TRUY_XUAT_NGUON_GOC_BATCH_52610103F1.txt`, `QA_TRUY_XUAT_NGUON_GOC_CHO_ORGANIC_BATCH_52800075F1.txt`. Mẫu file .eml đích: `...Email-OE-Overview-ILD0016 (3).eml` (trong uploads).
-
-- `buildEmail(ex)` sinh nội dung bám verbatim mẫu QA (câu mở đầu, bảng Batch/Material, phân công từng bộ phận, Note 3 mục, chữ ký). Câu mở đầu + chữ ký lấy từ `DB.settings.sender` (đã cho cấu hình được).
-- `emailSubject(ex)` đổi tiêu đề theo `purpose`: Organic / Recall / mặc định "DIỄN TẬP".
-- **Tạo email Outlook (.eml):** `Email.eml()` → `Email.buildEML()` sinh file RFC822 với:
-  - Header **`X-Unsent: 1`** (Outlook mở ra = thư nháp CHƯA gửi, chỉ bấm Send).
-  - Subject mã hóa `=?UTF-8?B?<base64>?=`; body `Content-Transfer-Encoding: base64`, `charset=UTF-8` (tiếng Việt chuẩn).
-  - To/Cc lấy từ textarea `#emTo`/`#emCc` (người dùng sửa được trước khi tạo).
-  - Tải xuống dạng `message/rfc822`, tên `QA_TruyXuat_<batch>.eml`.
-- `Email.mailto()` giữ làm phương án dự phòng.
-- **Chưa làm (gợi ý tiếp):** nhúng sẵn attachment (Annex 1 hoặc file .xlsx của đợt) vào .eml — hiện phải đính kèm tay.
-
----
-
-## 8. Module `Xlsx` — xuất Excel .xlsx offline (không thư viện)
-
-- Tự build **ZIP (store, no compression) + CRC32** + các part OOXML (`[Content_Types].xml`, `_rels`, `workbook.xml`, `styles.xml`, `worksheets/sheet1.xml`).
-- Cell dùng `inlineStr` (không shared strings); hỗ trợ `mergeCells`, `cols` width, vài style (bold/title/header/section) qua `styles.xml`.
-- `Xlsx.report(id)` xuất báo cáo 1 đợt theo layout QA.F.029/030 (gồm cả Mass Balance ILD). Tên file `QA.F.029_Forward_<batch>.xlsx` / `QA.F.030_Backward_...`.
-- Helper nội bộ: `Sheet`, `cell()`, `sheetXML()`, `buildSection()` (trace), `buildMassStage()` (mass), `bytes(ex)` (đóng gói), `report(id)` (tải).
-- Đã verify mở được bằng openpyxl. Khi sửa: giữ CRC32 + cấu trúc zip chuẩn, test lại bằng openpyxl.
-
----
-
-## 9. Trạng thái hiện tại (ĐÃ xong)
-
-- [x] 8 tab đầy đủ, style Industrial Light, auto-save LocalStorage, backup/restore JSON.
-- [x] Dashboard KPI + nhắc việc (2 đợt/năm, quá hạn 4h, thiếu hồ sơ).
-- [x] Đợt truy xuất: thông tin lô, chọn chiều, đồng hồ đếm ngược 4h, nhân bản/xóa, đóng & đánh giá.
-- [x] Soạn email: template bám mẫu QA, To/Cc, tạo .eml (X-Unsent), người gửi cấu hình được.
-- [x] Checklist hồ sơ: seed Annex 1 (Backward ~94 form / Forward ~13), Có/Không/N/A, % theo bộ phận, xuất CSV.
-- [x] Chi tiết truy xuất: 5 section theo QA.F.029/030, Gap tự tính, đảo chiều.
-- [x] Mass Balance: logic ILD 2-stage, hệ số chỉnh được, khớp công thức file ILD.
-- [x] Báo cáo: layout chính thức 8 mục + in/PDF + xuất .xlsx.
-- [x] Cài đặt: thông số, người gửi email, danh bạ To/Cc, danh mục Annex 1, audit log, reset.
-
-## 10. Gợi ý việc tiếp theo (chưa làm)
-- Nhúng attachment (Annex 1 / .xlsx) trực tiếp vào .eml.
-- Xuất Excel 2 sheet (Forward + Backward) hoặc khung viền đậm hơn cho giống biểu mẫu in.
-- QR/Barcode cho batch; đa ngôn ngữ EN/VI; PWA cài như app.
-- Xóa `MB_STAGES` (code chết). Cân nhắc cho phép cấu hình số stage/hệ số của mass balance linh hoạt hơn (hiện fixed 2 stage).
-
----
-
-## 11. Quy ước khi sửa code
-- Giữ comment vùng `[TÊN]` và phong cách module-object (`Ex`, `Mb`, `Tr`...).
-- Mỗi lần đổi dữ liệu → gọi `Store.save()`; thao tác đáng ghi → `logAct()`.
-- Input số: lưu `oninput`, rerender `onchange` (tránh mất focus khi gõ).
-- Thêm field vào model → thêm migration ở `boot()`.
-- Escape mọi chuỗi đưa vào HTML bằng `esc()`.
-- Tiếng Việt: dùng số định dạng `fmtNum` (vi-VN, dấu `.` ngăn nghìn) nhưng LƯU số thực.
-- Sau sửa: `node --check` + smoke test 8 tab (+ openpyxl nếu đụng Xlsx).
-
-## 12. File nguồn tham chiếu (trong D:\14_TRACEABILITY)
-- Quy trình: `QA.P.00X TRACEABILITY PROCEDURE - 002.docx`, `6589.QA.P.009 TRACEABILITY PROCEDURE.pdf`
-- Training: `iLD_Traceability System Training.pptx`
-- Danh mục hồ sơ: `Annex 1 List of records, documents for traceability sytem.xlsx`
-- Report mẫu: `QA.F.029 Forward Traceability Report.xlsx`, `QA.F.029-030 Traceability report,v2.xlsx`, `Traceability Report - 29.05_42080028F1.xlsx`
-- Mass balance: `ORGANIC MASSBALANCE SUMMARY_ILD.xlsx` (logic gốc + công thức), `..._Olam.xlsx`
-- Email mẫu: 2 file `QA_..._BATCH_*.txt` + `...Email-OE-Overview-ILD0016 (3).eml`
-
----
-*Hand-off tạo ngày 2026-10-07. App do QA iLD Coffee đặt làm; mọi chỉnh sửa giữ nguyên ràng buộc 1-file / offline / LocalStorage.*
+> Đọc HANDOFF.md này trước và kiểm tra index.html. Người dùng muốn Process Flow làm trung tâm truy xuất đa người dùng trên web nội bộ, mỗi đại diện đăng nhập và nhập phiếu công đoạn, nối nhiều đầu vào/đầu ra, mass balance và truy ngược/xuôi. Giao diện chỉ có một index.html; backend Python/SQLite được nhúng dưới dạng gói nguồn JSON và cũng có thể trích ra để chạy. Giữ phân quyền thực ở server, không giả lập bằng LocalStorage. Xác định phần nào đã có, nêu rõ giới hạn pilot, rồi tiếp tục theo yêu cầu mới của người dùng. Ưu tiên giữ dữ liệu, kiểm phiên bản đồng thời, chứng cứ và cân bằng đúng basis. Không tuyên bố đã triển khai LAN hoặc đạt yêu cầu QA khi chưa nghiệm thu. Đồng bộ gói nguồn trong HTML trước khi bàn giao lại.
