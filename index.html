@@ -2028,7 +2028,7 @@ const FLOW_NODES=[
   ['rw2','oval',682,785,120,56,'rework','Rework'],['air','oval',5,870,120,48,'util','Compressed air'],
   ['oil2','oval',5,924,120,48,'by','Coffee Oil'],['fp','box',215,946,113,50,'proc','F&P'],
   ['rw3','oval',685,944,120,56,'rework','Rework'],['pm1','oval',5,1051,120,48,'pm','PM 1'],
-  ['fg2','pill',222,1052,106,47,'fg','FGs (Liquid)']];
+  ['fg2','pill',222,1052,106,47,'fg','FGs (Powder)']];
 // [from, cạnh, vị trí trên cạnh (0..1), to, cạnh, vị trí, điểm gãy (0..1), nét đứt]  — cạnh: T/B/L/R
 const FLOW_EDGES=[
   ['gc','B',.5,'pre','T',.5],['pre','R',.5,'dust','L',.5],['pre','B',.5,'roast','T',.5],['roast','R',.5,'oil1','L',.5],
@@ -2303,6 +2303,8 @@ function boot(){
   DB.ccContacts ||= JSON.parse(JSON.stringify(SEED_CC));
   DB.settings.sender ||= defaultSender();   // migration: thông tin người gửi
   if(!DB.flow || !DB.flow.nodes || !DB.flow.edges) DB.flow=newFlow();   // migration: sơ đồ Process Flow
+  // migration: thành phẩm nhánh Freeze Drying là dạng bột (sơ đồ đã lưu trước đó ghi Liquid)
+  DB.flow.nodes.forEach(n=>{ if(n.id==='fg2' && n.label==='FGs (Liquid)') n.label='FGs (Powder)'; });
   // Bổ sung các liên hệ mẫu còn thiếu (Grasso/WTP) cho DB cũ
   SEED_CONTACTS.forEach(sc=>{ if(!DB.contacts.some(c=>c.email===sc.email)) DB.contacts.push(JSON.parse(JSON.stringify(sc))); });
   // Migration: bổ sung trace + mass model mới cho đợt tạo trước khi có tính năng này
